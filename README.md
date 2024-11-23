@@ -3,8 +3,7 @@
 Clank is a voice-controlled LED automation project that combines speech recognition, local AI models, and ESP32-controlled hardware. Built on top of the [Moonshine](https://github.com/usefulsensors/moonshine) speech recognition system, it enables voice-activated control of LED lights through natural language commands.
 
 
-[Screencast_20241123_175704.webm](https://github.com/user-attachments/assets/1bf5a409-53e1-4fcd-9c95-fbe09ed09d65)
-
+[Screencast_20241123_181801.webm](https://github.com/user-attachments/assets/dec3e33a-f05d-4ce7-9d4b-73716c0f2577)
 
 ## Vision
 
