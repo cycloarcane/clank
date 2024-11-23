@@ -22,6 +22,10 @@ LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
 MIN_REFRESH_SECS = 0.2
 
+# ESP32 Configuration
+ESP32_IP = "192.168.0.18"  # Replace with your ESP32's IP address
+ESP32_ENDPOINT = f"http://{ESP32_IP}/led-control"
+
 # LLM API Configuration
 LLM_ENDPOINT = "http://127.0.0.1:5000/v1/completions"
 
@@ -68,31 +72,41 @@ class VoiceProcessor:
         return None
 
     def process_command(self, text):
-        """Send transcribed text to LLM with system prompt"""
+        """Send transcribed text to LLM and forward response to ESP32"""
         try:
+            # First get command from LLM
             payload = {
                 "prompt": f"{SYSTEM_PROMPT}\nUser command: {text}\nResponse:",
-                "max_tokens": 150,  # Increased for brightness commands
-                "temperature": 0.0,  # Set to 0 for most consistent responses
-                "stop": ["\n", "://"]  # Stop on newlines or protocol markers
+                "max_tokens": 150,
+                "temperature": 0.0,
+                "stop": ["\n", "://"]
             }
-            response = requests.post(LLM_ENDPOINT, json=payload)
-            response.raise_for_status()
+            llm_response = requests.post(LLM_ENDPOINT, json=payload)
+            llm_response.raise_for_status()
             
             print("\nLLM Response:")
             print("-------------")
             try:
-                llm_response = response.json()
-                response_text = llm_response['choices'][0]['text'].strip()
+                response_json = llm_response.json()
+                response_text = response_json['choices'][0]['text'].strip()
                 parsed_json = self.extract_json_from_text(response_text)
                 if parsed_json:
                     print(json.dumps(parsed_json, indent=2))
+                    
+                    # Forward the command to ESP32
+                    if parsed_json["action"] == "led_control":
+                        try:
+                            esp32_response = requests.post(ESP32_ENDPOINT, json=parsed_json)
+                            esp32_response.raise_for_status()
+                            print(f"ESP32 Response: {esp32_response.text}")
+                        except requests.exceptions.RequestException as e:
+                            print(f"Error sending command to ESP32: {e}")
                 else:
                     print("Failed to parse JSON from response:")
                     print(response_text)
             except Exception as e:
                 print(f"Error processing response: {e}")
-                print("Raw response:", response.text)
+                print("Raw response:", llm_response.text)
             print("-------------\n")
             
         except Exception as e:
