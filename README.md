@@ -6,7 +6,6 @@ Clank is a voice-controlled LED automation project that combines speech recognit
 [Screencast_20241123_175704.webm](https://github.com/user-attachments/assets/1bf5a409-53e1-4fcd-9c95-fbe09ed09d65)
 
 
-
 ## Vision
 
 Clank allows users to control LED lights through simple spoken commands. The system flow is:
