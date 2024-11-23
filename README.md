@@ -1,40 +1,58 @@
-
 # Clank
 
-Clank is an ambitious project that bridges voice commands, artificial intelligence, and physical automation. It uses speech-to-text transcription, local AI models, and ESP32-controlled hardware to enable voice-activated home or industrial automation.
+Clank is a voice-controlled LED automation project that combines speech recognition, local AI models, and ESP32-controlled hardware. Built on top of the [Moonshine](https://github.com/usefulsensors/moonshine) speech recognition system, it enables voice-activated control of LED lights through natural language commands.
 
 ## Vision
 
-Clank will allow users to control physical devices such as LEDs, motors, and other hardware through simple spoken commands. The system flow is:
+Clank allows users to control LED lights through simple spoken commands. The system flow is:
 
-1. **User Speech**: Audio is captured via a microphone.
-2. **Transcription**: Speech is transcribed into text using [Moonshine](https://github.com) and Sox.
-3. **AI Integration**: The text is sent to a locally hosted LLM (running at `127.0.0.1:5000`) for interpretation and processing.
-4. **Hardware Control**: The LLM returns structured output to a listener, which activates specific GPIOs on an ESP32 to perform actions (e.g., light LEDs or turn on motors).
+1. **User Speech**: Audio is captured via the default microphone using sounddevice
+2. **Voice Activity Detection**: Using Silero VAD to detect speech segments
+3. **Transcription**: Speech is transcribed into text using Moonshine's speech recognition model
+4. **AI Processing**: The text is sent to a locally hosted LLM (running at `127.0.0.1:5000`) for interpretation
+5. **LED Control**: The LLM returns structured JSON output which will be used to control LEDs via ESP32 GPIOs
 
 ## Current Status
 
-The project is in its early stages, focusing on the **speech-to-text transcription** pipeline:
+The project has achieved several key milestones:
 
-- Audio recording is implemented using Sox.
-- Transcription is performed using the Moonshine model.
+- **Speech Recognition**: Successfully implemented using Moonshine's ONNX models
+- **Voice Activity Detection**: Integrated Silero VAD for accurate speech detection
+- **Command Processing**: LLM successfully generates structured JSON responses for LED control
+- **Example Response**:
+  ```json
+  {
+    "action": "led_control",
+    "parameters": {
+      "color": "blue",
+      "state": "on",
+      "brightness": 50
+    }
+  }
+  ```
 
-## Features (Implemented and Planned)
+## Features
 
 ### Implemented
-- **Record Audio**: Uses Sox to capture audio from the default microphone.
-- **Transcribe Speech**: Automatically converts recorded audio into text.
+- **Audio Capture**: Uses sounddevice for real-time audio input
+- **Speech Detection**: Silero VAD for precise voice activity detection
+- **Speech Recognition**: Moonshine-powered transcription
+- **Command Processing**: Local LLM interpretation with structured JSON output
+
+### In Progress
+- **ESP32 Integration**: Development of firmware to receive and process LLM commands
+- **LED Control**: GPIO management for LED state and brightness control
 
 ### Planned
-- **Integrate LLM**: Transcribed text will be sent to a locally hosted LLM for interpretation.
-- **Device Control**: Use structured output from the LLM to control hardware via ESP32 GPIOs.
-- **Home/Industrial Automation**: Build automation systems for homes and industrial settings.
+- **Extended Hardware Control**: Support for multiple LED arrays
+- **Advanced Voice Commands**: More complex lighting patterns and scenes
+- **Web Interface**: Configuration and monitoring dashboard
 
 ## Installation
 
-1. **Install Sox** (on Arch Linux):
+1. **Set Required Environment Variable**:
    ```bash
-   sudo pacman -S sox
+   export KERAS_BACKEND=torch
    ```
 
 2. **Clone the Repository**:
@@ -44,44 +62,48 @@ The project is in its early stages, focusing on the **speech-to-text transcripti
    ```
 
 3. **Install Python Dependencies**:
-   Ensure you have Python installed. Then, install the required Python libraries:
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Configure Moonshine**:
-   Ensure the Moonshine model is set up and available at the specified `model_path` in the script.
+4. **Configure Local LLM**:
+   Ensure your local LLM server is running at `127.0.0.1:5000`
 
 ## Usage
 
-Run the main script to record and transcribe audio:
+Run the voice control script:
 
 ```bash
-python transcribe.py
+python voice_LED_control.py
 ```
 
-- **Start Recording**: Speak into your microphone.
-- **Stop Recording**: Press `ENTER` to finish recording.
-- The transcription will automatically appear in your terminal.
+Available voice commands:
+- "Computer turn on red LED"
+- "Computer set blue LED to 50%"
+- "Computer turn off green LED"
 
-## Future Goals
+## Project Structure
 
-### AI Integration
-- Host a local LLM at `127.0.0.1:5000` to process transcriptions into actionable commands.
-- Design the system to support a variety of automation tasks.
+- `voice_LED_control.py`: Main script for voice capture and processing
+- `onnx_model.py`: Moonshine model wrapper for speech recognition
+- `requirements.txt`: Python dependencies
+- `README.md`: Project documentation
 
-### Hardware Control
-- Develop a listener service that translates LLM outputs into ESP32 GPIO actions.
-- Enable control of devices like LEDs, motors, and other home/industrial equipment.
+## Acknowledgments
 
-### Modular Development
-- Provide users with modular options for customizing tasks and hardware actions.
+This project heavily builds upon the [Moonshine](https://github.com/usefulsensors/moonshine) speech recognition system and their live_captions demo. Special thanks to the Moonshine team:
 
-## File Structure (subject to change and me forgetting temporarily to update this section)
-
-- `transcribe.py`: Main script for recording and transcription.
-- `requirements.txt`: Python dependencies (if any).
-- `README.md`: Project documentation.
+```bibtex
+@misc{jeffries2024moonshinespeechrecognitionlive,
+      title={Moonshine: Speech Recognition for Live Transcription and Voice Commands}, 
+      author={Nat Jeffries and Evan King and Manjunath Kudlur and Guy Nicholson and James Wang and Pete Warden},
+      year={2024},
+      eprint={2410.15608},
+      archivePrefix={arXiv},
+      primaryClass={cs.SD},
+      url={https://arxiv.org/abs/2410.15608}, 
+}
+```
 
 ## Contributing
 
@@ -89,8 +111,7 @@ Contributions are welcome! If you'd like to help build Clank, please submit a pu
 
 ## Contact
 
-For any questions or support, reach out to me at:
-
+For questions or support:
 - **Email**: cycloarkane@gmail.com
 - **GitHub**: [cycloarcane](https://github.com/cycloarcane)
 
@@ -100,4 +121,4 @@ This project is licensed under a modified non-commercial GNU 3.0 license.
 
 ---
 
-Join me on this journey to make Clank a reality! 🎤🤖💡
+Join us in building the future of voice-controlled lighting! 🎤💡
