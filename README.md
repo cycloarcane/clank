@@ -1,12 +1,18 @@
 # Clank – Voice‑controlled LED assistant
 
 Clank turns spoken commands into JSON actions for LED strips (and whatever hardware you wire up next).  
-It relies on the **Moonshine** speech‑to‑text model, an LLM for intent parsing, and ESP32 firmware for the LEDs.
+It relies on the **Moonshine** speech‑to‑text model, **Ollama** for intent parsing, and ESP32 firmware for the LEDs.
 
 ---
 
 [Screencast_20241123_181801.webm](https://github.com/user-attachments/assets/dec3e33a-f05d-4ce7-9d4b-73716c0f2577)
 
+
+## Prerequisites
+
+- **Ollama** installed and running: `ollama serve`
+- A model pulled: `ollama pull qwen3:14b` (or your preferred model)
+- **ESP32** with LED firmware running on your network
 
 ## Quick‑start
 
@@ -15,17 +21,25 @@ It relies on the **Moonshine** speech‑to‑text model, an LLM for intent parsi
 git clone https://github.com/cycloarcane/clank.git
 cd clank
 
-# Python deps (better: use a venv)
+# create virtual environment (recommended)
+python3 -m venv .venv
+source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
+
+# install Python dependencies
 pip install -r requirements.txt
 
 # fetch the vetted ONNX weights (≈250 MB) and generate SHA256SUMS
 ./scripts/fetch_moonshine.sh
 
 # verify integrity
-sha256sum --quiet -c SHA256SUMS   # prints “OK” twice
+sha256sum --quiet -c SHA256SUMS   # prints "OK" twice
+
+# configure your setup (edit src/voicecommand/voice_LED_control.py):
+# - Update ESP32_IP to your ESP32's IP address  
+# - Update LLM_MODEL to your preferred Ollama model
 
 # fire it up
-python -m src.voice_led_control
+python3 src/voicecommand/voice_LED_control.py
 ```
 
 ---
@@ -35,6 +49,7 @@ python -m src.voice_led_control
 ```text
 clank/
 ├─ README.md               ← *this file*
+├─ requirements.txt        ← Python dependencies
 ├─ SHA256SUMS              ← model digests you can re‑check anytime
 ├─ scripts/
 │   └─ fetch_moonshine.sh  ← downloads the exact weights we audited
@@ -43,13 +58,24 @@ clank/
 │       ├─ encoder_model.onnx
 │       └─ decoder_model_merged.onnx
 ├─ src/                    ← Python backend
-│   ├─ voice_led_control.py
-│   ├─ onnx_model.py
-│   └─ …
+│   ├─ assets/
+│   │   └─ tokenizer.json  ← Moonshine tokenizer
+│   └─ voicecommand/
+│       ├─ voice_LED_control.py ← main application
+│       └─ onnx_model.py   ← security-hardened model wrapper
 └─ ESP32LEDs/              ← micro‑controller firmware
 ```
 
 ---
+
+## Security Features
+
+Clank implements multiple layers of security for the AI models:
+
+- **Commit-locked downloads**: Only the audited `2501abf` commit is downloaded
+- **SHA256 verification**: All models are integrity-checked before loading  
+- **No runtime downloads**: The application only uses pre-verified local models
+- **Official library integration**: Uses UsefulSensors' official moonshine-onnx library with local model loading
 
 ## Model provenance & supply‑chain hardening
 
