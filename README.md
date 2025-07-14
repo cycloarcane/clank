@@ -1,127 +1,102 @@
-# Clank
+# Clank – Voice‑controlled LED assistant
 
-Clank is a voice-controlled LED automation project that combines speech recognition, local AI models, and ESP32-controlled hardware. Built on top of the [Moonshine](https://github.com/usefulsensors/moonshine) speech recognition system, it enables voice-activated control of LED lights through natural language commands.
-
-
-[Screencast_20241123_181801.webm](https://github.com/user-attachments/assets/dec3e33a-f05d-4ce7-9d4b-73716c0f2577)
-
-## Vision
-
-Clank allows users to control LED lights through simple spoken commands. The system flow is:
-
-1. **User Speech**: Audio is captured via the default microphone using sounddevice
-2. **Voice Activity Detection**: Using Silero VAD to detect speech segments
-3. **Transcription**: Speech is transcribed into text using Moonshine's speech recognition model
-4. **AI Processing**: The text is sent to a locally hosted LLM (running at `127.0.0.1:5000`) for interpretation
-5. **LED Control**: The LLM returns structured JSON output which will be used to control LEDs via ESP32 GPIOs
-
-## Current Status
-
-The project has achieved several key milestones:
-
-- **Speech Recognition**: Successfully implemented using Moonshine's ONNX models
-- **Voice Activity Detection**: Integrated Silero VAD for accurate speech detection
-- **Command Processing**: LLM successfully generates structured JSON responses for LED control
-- **Example Response**:
-  ```json
-  {
-    "action": "led_control",
-    "parameters": {
-      "color": "blue",
-      "state": "on",
-      "brightness": 50
-    }
-  }
-  ```
-
-## Features
-
-### Implemented
-- **Audio Capture**: Uses sounddevice for real-time audio input
-- **Speech Detection**: Silero VAD for precise voice activity detection
-- **Speech Recognition**: Moonshine-powered transcription
-- **Command Processing**: Local LLM interpretation with structured JSON output
-
-### In Progress
-- **ESP32 Integration**: Development of firmware to receive and process LLM commands
-- **LED Control**: GPIO management for LED state and brightness control
-
-### Planned
-- **Extended Hardware Control**: Support for multiple LED arrays
-- **Advanced Voice Commands**: More complex lighting patterns and scenes
-- **Web Interface**: Configuration and monitoring dashboard
-
-## Installation
-
-1. **Set Required Environment Variable**:
-   ```bash
-   export KERAS_BACKEND=torch
-   ```
-
-2. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/cycloarcane/clank.git
-   cd clank
-   ```
-
-3. **Install Python Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure Local LLM**:
-   Ensure your local LLM server is running at `127.0.0.1:5000`
-
-## Usage
-
-Run the voice control script:
-
-```bash
-python voice_LED_control.py
-```
-
-Available voice commands:
-- "Computer turn on red LED"
-- "Computer set blue LED to 50%"
-- "Computer turn off green LED"
-
-## Project Structure
-
-- `voice_LED_control.py`: Main script for voice capture and processing
-- `onnx_model.py`: Moonshine model wrapper for speech recognition
-- `requirements.txt`: Python dependencies
-- `README.md`: Project documentation
-
-## Acknowledgments
-
-This project heavily builds upon the [Moonshine](https://github.com/usefulsensors/moonshine) speech recognition system and their live_captions demo. Special thanks to the Moonshine team:
-
-```bibtex
-@misc{jeffries2024moonshinespeechrecognitionlive,
-      title={Moonshine: Speech Recognition for Live Transcription and Voice Commands}, 
-      author={Nat Jeffries and Evan King and Manjunath Kudlur and Guy Nicholson and James Wang and Pete Warden},
-      year={2024},
-      eprint={2410.15608},
-      archivePrefix={arXiv},
-      primaryClass={cs.SD},
-      url={https://arxiv.org/abs/2410.15608}, 
-}
-```
-
-## Contributing
-
-Contributions are welcome! If you'd like to help build Clank, please submit a pull request or open an issue for any feature requests or bug fixes.
-
-## Contact
-
-For questions or support:
-- **Email**: cycloarkane@gmail.com
-- **GitHub**: [cycloarcane](https://github.com/cycloarcane)
-
-## License
-
-This project is licensed under a modified non-commercial GNU 3.0 license.
+Clank turns spoken commands into JSON actions for LED strips (and whatever hardware you wire up next).  
+It relies on the **Moonshine** speech‑to‑text model, an LLM for intent parsing, and ESP32 firmware for the LEDs.
 
 ---
 
-Join us in building the future of voice-controlled lighting! 🎤💡
+[Screencast_20241123_181801.webm](https://github.com/user-attachments/assets/dec3e33a-f05d-4ce7-9d4b-73716c0f2577)
+
+
+## Quick‑start
+
+```bash
+# clone and enter
+git clone https://github.com/cycloarcane/clank.git
+cd clank
+
+# Python deps (better: use a venv)
+pip install -r requirements.txt
+
+# fetch the vetted ONNX weights (≈250 MB) and generate SHA256SUMS
+./scripts/fetch_moonshine.sh
+
+# verify integrity
+sha256sum --quiet -c SHA256SUMS   # prints “OK” twice
+
+# fire it up
+python -m src.voice_led_control
+```
+
+---
+
+## Repository layout
+
+```text
+clank/
+├─ README.md               ← *this file*
+├─ SHA256SUMS              ← model digests you can re‑check anytime
+├─ scripts/
+│   └─ fetch_moonshine.sh  ← downloads the exact weights we audited
+├─ models/
+│   └─ moonshine/
+│       ├─ encoder_model.onnx
+│       └─ decoder_model_merged.onnx
+├─ src/                    ← Python backend
+│   ├─ voice_led_control.py
+│   ├─ onnx_model.py
+│   └─ …
+└─ ESP32LEDs/              ← micro‑controller firmware
+```
+
+---
+
+## Model provenance & supply‑chain hardening
+
+| Item | Value |
+|------|-------|
+| **Repository** | `UsefulSensors/moonshine` on Hugging Face |
+| **Immutable commit** | `2501abf` |
+| **Files** | `onnx/merged/base/float/encoder_model.onnx` (80 MB)  <br> `onnx/merged/base/float/decoder_model_merged.onnx` (166 MB) |
+| **Download script** | `scripts/fetch_moonshine.sh` |
+| **Hash file** | `SHA256SUMS` (auto‑regenerated by the script) |
+
+### Why commit‑lock?
+
+Using `…/resolve/**2501abf**/…` guarantees every clone receives *identical bytes*.  
+A silent upstream update can only occur if we *change the commit hash and publish new checksums*.
+
+---
+
+## Auditing the model with Netron
+
+We visually inspected the weights for PAIT‑ONNX‑200 class architectural back‑doors:
+
+```bash
+pip install netron            # one‑time
+netron models/moonshine/encoder_model.onnx &   # opens http://localhost:8080
+netron models/moonshine/decoder_model_merged.onnx &
+```
+
+1. **View → Layout → Hierarchical** for a tall vertical graph.  
+2. **Search** (`Ctrl/⌘‑F`) for operators that don’t belong in an acoustic model: `If`, `Where`, `Equal`, `ArgMax`, tiny `MatMul` with a constant.  
+3. Legitimate paths are hundreds of Conv / GRU blocks. A back‑door path is usually < 20 nodes and rejoins just before `Softmax`.  
+4. Repeat this check whenever you upgrade the weights.
+
+We found **no suspicious parallel branches** in commit `2501abf`; the hashes in *SHA256SUMS* reflect this vetted state.
+
+---
+
+## Re‑auditing & updating
+
+1. Checkout a new branch.  
+2. Update `MOON_COMMIT` inside `scripts/fetch_moonshine.sh`.  
+3. Run the script, inspect the graphs in Netron, update `SHA256SUMS` (`sha256sum … > SHA256SUMS`).  
+4. Open a PR summarising what you checked (Netron screenshots welcome).  
+5. Once merged, downstream users repeat the standard quick‑start and stay safe.
+
+---
+
+## License
+
+MIT (see `LICENSE` for full text)
