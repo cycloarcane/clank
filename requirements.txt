@@ -1,0 +1,23 @@
+# Clank Voice LED Control - Python Dependencies
+# Speech processing and AI
+numpy>=1.21.0
+onnxruntime>=1.15.0
+tokenizers>=0.13.0
+silero-vad>=4.0.0
+
+# Audio processing
+sounddevice>=0.4.6
+
+# HTTP requests and web communication
+requests>=2.28.0
+
+# Optional: HuggingFace Hub (only needed if downloading models directly)
+# Note: This project uses pre-verified local models for security
+# huggingface-hub>=0.16.0
+
+# System dependencies that may need to be installed via system package manager:
+# - libsndfile1 (for sounddevice)
+# - portaudio19-dev (for sounddevice)
+# 
+# On Ubuntu/Debian: sudo apt-get install libsndfile1 portaudio19-dev
+# On macOS with Homebrew: brew install portaudio
