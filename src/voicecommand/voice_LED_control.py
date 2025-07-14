@@ -26,10 +26,11 @@ MIN_REFRESH_SECS = 0.2
 ESP32_IP = "192.168.0.18"  # Replace with your ESP32's IP address
 ESP32_ENDPOINT = f"http://{ESP32_IP}/led-control"
 
-# LLM API Configuration
-LLM_ENDPOINT = "http://127.0.0.1:5000/v1/completions"
+# LLM API Configuration (Ollama)
+LLM_ENDPOINT = "http://127.0.0.1:11434/api/generate"
+LLM_MODEL = "qwen3:14b"  # Change this to your preferred ollama model
 
-SYSTEM_PROMPT = """You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+SYSTEM_PROMPT = """/nothink You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
 Commands can include:
 - Turning LEDs on/off: "Computer turn on red LED"
@@ -74,12 +75,15 @@ class VoiceProcessor:
     def process_command(self, text):
         """Send transcribed text to LLM and forward response to ESP32"""
         try:
-            # First get command from LLM
+            # First get command from LLM (Ollama format)
             payload = {
+                "model": LLM_MODEL,
                 "prompt": f"{SYSTEM_PROMPT}\nUser command: {text}\nResponse:",
-                "max_tokens": 150,
-                "temperature": 0.0,
-                "stop": ["\n", "://"]
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 150
+                }
             }
             llm_response = requests.post(LLM_ENDPOINT, json=payload)
             llm_response.raise_for_status()
@@ -88,7 +92,7 @@ class VoiceProcessor:
             print("-------------")
             try:
                 response_json = llm_response.json()
-                response_text = response_json['choices'][0]['text'].strip()
+                response_text = response_json['response'].strip()
                 parsed_json = self.extract_json_from_text(response_text)
                 if parsed_json:
                     print(json.dumps(parsed_json, indent=2))
@@ -114,7 +118,11 @@ class VoiceProcessor:
 
 class Transcriber:
     def __init__(self, model_name, rate=16000):
-        self.model = MoonshineOnnxModel(model_name=model_name)
+        # Use local secure models instead of downloading from HuggingFace Hub
+        models_dir = os.path.join(
+            CLANK_MOONSHINE_DEMO_DIR, "..", "..", "models", "moonshine"
+        )
+        self.model = MoonshineOnnxModel(models_dir=models_dir)
         self.rate = rate
         tokenizer_path = os.path.join(
             CLANK_MOONSHINE_DEMO_DIR, "..", "assets", "tokenizer.json"
