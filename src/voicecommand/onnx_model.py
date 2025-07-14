@@ -1,84 +1,85 @@
-"""ONNX model wrapper for Moonshine ASR with automatic download from Hugging Face Hub."""
+"""ONNX model wrapper for Moonshine ASR using official moonshine-onnx library."""
 
-def _get_onnx_weights(model_name):
-    """Download model weights from Hugging Face Hub."""
-    from huggingface_hub import hf_hub_download
+import os
+import hashlib
 
-    repo = "UsefulSensors/moonshine"
-
-    return (
-        hf_hub_download(repo, f"{x}.onnx", subfolder=f"onnx/{model_name}")
-        for x in ("preprocess", "encode", "uncached_decode", "cached_decode")
-    )
+def _verify_model_integrity(models_dir):
+    """Verify SHA256 checksums of model files before loading.
+    
+    Args:
+        models_dir: Directory containing the model files
+        
+    Returns:
+        bool: True if all checksums match, False otherwise
+        
+    Raises:
+        FileNotFoundError: If model files or SHA256SUMS are missing
+        ValueError: If checksums don't match
+    """
+    sha256sums_path = os.path.join(models_dir, "..", "..", "SHA256SUMS")
+    
+    if not os.path.exists(sha256sums_path):
+        raise FileNotFoundError(f"SHA256SUMS not found at {sha256sums_path}")
+    
+    expected_hashes = {}
+    with open(sha256sums_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                hash_val, file_path = line.split(None, 1)
+                expected_hashes[file_path] = hash_val
+    
+    # Check model files
+    model_files = ["models/moonshine/encoder_model.onnx", "models/moonshine/decoder_model_merged.onnx"]
+    
+    for file_path in model_files:
+        if file_path not in expected_hashes:
+            raise ValueError(f"No expected hash found for {file_path}")
+        
+        full_path = os.path.join(models_dir, "..", "..", file_path)
+        if not os.path.exists(full_path):
+            raise FileNotFoundError(f"Model file not found: {full_path}")
+        
+        # Calculate actual hash
+        hasher = hashlib.sha256()
+        with open(full_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hasher.update(chunk)
+        actual_hash = hasher.hexdigest()
+        
+        if actual_hash != expected_hashes[file_path]:
+            raise ValueError(f"SHA256 mismatch for {file_path}: expected {expected_hashes[file_path]}, got {actual_hash}")
+    
+    return True
 
 class MoonshineOnnxModel(object):
     def __init__(self, models_dir=None, model_name=None):
-        """Initialize Moonshine ONNX model.
+        """Initialize Moonshine ONNX model using official moonshine-onnx library.
         
         Args:
             models_dir: Directory containing local model files (optional)
-            model_name: Model name to download from HuggingFace Hub (if models_dir not provided)
+            model_name: Model name for fallback (unused when models_dir is provided)
         """
-        import onnxruntime
-
-        if models_dir is None:
-            assert (
-                model_name is not None
-            ), "model_name should be specified if models_dir is not"
-            preprocess, encode, uncached_decode, cached_decode = (
-                self._load_weights_from_hf_hub(model_name)
-            )
+        import moonshine_onnx
+        
+        if models_dir is not None:
+            # Verify model integrity before loading
+            _verify_model_integrity(models_dir)
+            
+            # Use official moonshine-onnx with local models
+            # The library still needs a model_name even when using local models
+            fallback_model_name = model_name or "moonshine/base"
+            self._model = moonshine_onnx.MoonshineOnnxModel(models_dir=models_dir, model_name=fallback_model_name)
         else:
-            preprocess, encode, uncached_decode, cached_decode = [
-                f"{models_dir}/{x}.onnx"
-                for x in ["preprocess", "encode", "uncached_decode", "cached_decode"]
-            ]
-        self.preprocess = onnxruntime.InferenceSession(preprocess)
-        self.encode = onnxruntime.InferenceSession(encode)
-        self.uncached_decode = onnxruntime.InferenceSession(uncached_decode)
-        self.cached_decode = onnxruntime.InferenceSession(cached_decode)
-
-    def _load_weights_from_hf_hub(self, model_name):
-        """Load model weights from Hugging Face Hub."""
-        model_name = model_name.split("/")[-1]
-        return _get_onnx_weights(model_name)
+            # Fallback to downloading if no local models
+            self._model = moonshine_onnx.MoonshineOnnxModel(model_name=model_name)
 
     def generate(self, audio, max_len=None):
-        """Generate transcription from audio.
+        """Generate transcription from audio using official moonshine-onnx.
         
         Args:
             audio: Numpy array of shape [1, num_audio_samples]
             max_len: Maximum length of generated sequence (optional)
         """
-        if max_len is None:
-            # max 6 tokens per second of audio
-            max_len = int((audio.shape[-1] / 16_000) * 6)
-        preprocessed = self.preprocess.run([], dict(args_0=audio))[0]
-        seq_len = [preprocessed.shape[-2]]
-
-        context = self.encode.run([], dict(args_0=preprocessed, args_1=seq_len))[0]
-        inputs = [[1]]
-        seq_len = [1]
-
-        tokens = [1]
-        logits, *cache = self.uncached_decode.run(
-            [], dict(args_0=inputs, args_1=context, args_2=seq_len)
-        )
-        for i in range(max_len):
-            next_token = logits.squeeze().argmax()
-            tokens.extend([next_token])
-            if next_token == 2:
-                break
-
-            seq_len[0] += 1
-            inputs = [[next_token]]
-            logits, *cache = self.cached_decode.run(
-                [],
-                dict(
-                    args_0=inputs,
-                    args_1=context,
-                    args_2=seq_len,
-                    **{f"args_{i+3}": x for i, x in enumerate(cache)},
-                ),
-            )
-        return [tokens]
+        # Use the official model's generate method directly
+        return self._model.generate(audio, max_len)
