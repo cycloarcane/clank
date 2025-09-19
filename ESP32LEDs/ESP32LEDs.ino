@@ -1,7 +1,11 @@
+#include <Arduino_BuiltIn.h>
+
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
+
+// baud 115200
 
 // WiFi credentials
 const char* ssid = "";
@@ -24,7 +28,7 @@ void setup() {
   pinMode(BLUE_LED_PIN, OUTPUT);
 
 
-  // Turn all LEDs off initially
+  // Turn all LEDs on initially
   digitalWrite(RED_LED_PIN, HIGH);
   digitalWrite(GREEN_LED_PIN, HIGH);
   digitalWrite(BLUE_LED_PIN, HIGH);
@@ -68,8 +72,8 @@ void handleLedControl() {
       // For now, treat any brightness > 0 as ON, 0 as OFF
       bool isOn = (brightness > 0) || (strcmp(state, "on") == 0);
 
-      // Handle all LEDs command
-      if (strlen(color) == 0) {
+      // Handle all LEDs command (accepts "all" or empty string for backwards compatibility)
+      if (strcmp(color, "all") == 0 || strlen(color) == 0) {
         digitalWrite(RED_LED_PIN, isOn ? HIGH : LOW);
         digitalWrite(GREEN_LED_PIN, isOn ? HIGH : LOW);
         digitalWrite(BLUE_LED_PIN, isOn ? HIGH : LOW);

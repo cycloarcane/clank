@@ -23,24 +23,25 @@ MAX_SPEECH_SECS = 15
 MIN_REFRESH_SECS = 0.2
 
 # ESP32 Configuration
-ESP32_IP = "192.168.0.18"  # Replace with your ESP32's IP address
+ESP32_IP = os.getenv("ESP32_IP", "192.168.0.18")  # Set via environment variable or default
 ESP32_ENDPOINT = f"http://{ESP32_IP}/led-control"
 
 # LLM API Configuration (Ollama)
 LLM_ENDPOINT = "http://127.0.0.1:11434/api/generate"
-LLM_MODEL = "qwen3:14b"  # Change this to your preferred ollama model
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:14b")  # Set via environment variable or default
 
 SYSTEM_PROMPT = """/nothink You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
 Commands can include:
-- Turning LEDs on/off: "Computer turn on red LED"
+- Turning individual LEDs on/off: "Computer turn on red LED"
+- Turning all LEDs on/off: "Computer turn on all LEDs" or "Computer turn off all LEDs"
 - Setting brightness: "Computer set blue LED to 50%"
 
 Response format:
 {
     "action": "led_control",
     "parameters": {
-        "color": string,  // The LED color (red, blue, green)
+        "color": string,  // The LED color (red, blue, green) OR "all" for all LEDs
         "state": string,  // "on" or "off"
         "brightness": number | null  // 0-100 if specified, null if not
     }

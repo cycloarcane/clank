@@ -16,6 +16,21 @@ It relies on the **Moonshine** speech‑to‑text model, **Ollama** for intent p
 
 ## Quick‑start
 
+### Automated Installation (Recommended)
+```bash
+# clone and enter
+git clone https://github.com/cycloarcane/clank.git
+cd clank
+
+# run automated installer (handles everything!)
+./install.sh
+
+# set your ESP32 IP and fire it up
+export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
+python3 src/voicecommand/voice_LED_control.py
+```
+
+### Manual Installation
 ```bash
 # clone and enter
 git clone https://github.com/cycloarcane/clank.git
@@ -32,11 +47,11 @@ pip install -r requirements.txt
 ./scripts/fetch_moonshine.sh
 
 # verify integrity
-sha256sum --quiet -c SHA256SUMS   # prints "OK" twice
+sha256sum -c SHA256SUMS   # prints "OK" twice
 
-# configure your setup (edit src/voicecommand/voice_LED_control.py):
-# - Update ESP32_IP to your ESP32's IP address  
-# - Update LLM_MODEL to your preferred Ollama model
+# set your ESP32 IP and Ollama model
+export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
+export LLM_MODEL=qwen3:14b     # optional: change Ollama model
 
 # fire it up
 python3 src/voicecommand/voice_LED_control.py
