@@ -26,5 +26,5 @@ echo "→ Calculating checksums"
 sha256sum "${FILES[@]}" > SHA256SUMS-$MOON_COMMIT
 
 echo "All done.  Verify later with:"
-echo "   sha256sum --quiet -c SHA256SUMS"
+echo "   sha256sum -c SHA256SUMS"
 echo "Run the command from the project root and make sure you get OK"
