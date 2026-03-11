@@ -85,12 +85,15 @@ clank/
 
 ## Security Features
 
-Clank implements multiple layers of security for the AI models:
+Clank implements multiple layers of security:
 
 - **Commit-locked downloads**: Only the audited `2501abf` commit is downloaded
-- **SHA256 verification**: All models are integrity-checked before loading  
+- **SHA256 verification**: All models are integrity-checked before loading
 - **No runtime downloads**: The application only uses pre-verified local models
 - **Official library integration**: Uses UsefulSensors' official moonshine-onnx library with local model loading
+- **Input validation**: Transcribed text is sanitised and length-bounded before being inserted into the LLM prompt, mitigating prompt injection via crafted audio
+- **LLM response validation**: JSON returned by Ollama is structurally validated against an allowlist of actions, colours, and states before being forwarded to the ESP32
+- **Structured logging**: Rotating file + separate audit log with automatic redaction of sensitive fields (API keys, tokens, IPs)
 
 ## Model provenance & supply‑chain hardening
 
