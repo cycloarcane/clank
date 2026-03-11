@@ -107,7 +107,7 @@ class AuditLogger:
         
         # Thread-safe event buffer
         self._event_buffer: List[SecurityEvent] = []
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.RLock()  # RLock allows re-entry from log_security_event -> _flush_events_now
         self._flush_interval = 5.0  # seconds
         self._flush_thread = None
         self._stop_flushing = False
