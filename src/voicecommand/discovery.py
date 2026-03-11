@@ -220,6 +220,7 @@ class FallbackDiscovery:
         self.ip_ranges = ip_ranges or ["192.168.1.0/24", "10.0.0.0/24"]
         self.logger = logging.getLogger(__name__)
         self.common_ports = [80, 443, 8080, 8443]
+        self._stop_scan = False
     
     def scan_for_devices(self, timeout: float = 2.0) -> List[DiscoveredDevice]:
         """Scan IP ranges for Clank LED devices."""
