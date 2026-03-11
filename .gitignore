@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment — never commit secrets
+.env
+.env.*
+
+# TLS certificates and keys — never commit private keys
+certs/
+
+# Model weights — large binaries, fetched by scripts/fetch_moonshine.sh
+models/
+
+# Logs
+logs/
+
+# Generated during install/netron
+install.log
+*.svg
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
