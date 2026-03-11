@@ -4,7 +4,6 @@
 import argparse
 import os
 import sys
-import asyncio
 from pathlib import Path
 
 # Add project root to path

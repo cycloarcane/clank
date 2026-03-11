@@ -48,9 +48,9 @@ def generate_self_signed_cert(
     ).serial_number(
         x509.random_serial_number()
     ).not_valid_before(
-        datetime.datetime.utcnow()
+        datetime.datetime.now(datetime.timezone.utc)
     ).not_valid_after(
-        datetime.datetime.utcnow() + datetime.timedelta(days=days_valid)
+        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days_valid)
     ).add_extension(
         x509.SubjectAlternativeName([
             x509.DNSName(hostname),

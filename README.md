@@ -5,7 +5,7 @@ It relies on the **Moonshine** speech‑to‑text model, **Ollama** for intent p
 
 ---
 
-[Screencast_20241123_181801.webm](https://github.com/user-attachments/assets/dec3e33a-f05d-4ce7-9d4b-73716c0f2577)
+<!-- Demo video — re-upload Screencast_20241123_181801.webm as a GitHub issue/PR attachment and paste the new URL here -->
 
 
 ## Prerequisites

@@ -4,9 +4,12 @@
 cd "/home/r/Documents/clank"
 source .venv/bin/activate
 
-# Load environment variables
+# Load environment variables (set -a exports every variable defined by source)
 if [[ -f .env ]]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    set -a
+    # shellcheck source=/dev/null
+    source .env
+    set +a
 fi
 
 echo "Starting Clank Voice Assistant..."

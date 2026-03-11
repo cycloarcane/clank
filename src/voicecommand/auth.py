@@ -150,10 +150,11 @@ class AuthManager:
             self.logger.warning(f"Inactive device {device_id} attempted access from {client_ip}")
             return None
         
-        # Update last seen
-        device.last_seen = time.time()
-        self._save_devices()
-        
+        # Update last seen inside the lock to prevent concurrent writes
+        with self.lock:
+            device.last_seen = time.time()
+            self._save_devices()
+
         self.logger.info(f"Authenticated device {device.name} ({device_id}) from {client_ip}")
         return device
     
