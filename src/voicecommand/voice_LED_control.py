@@ -59,6 +59,9 @@ class VoiceProcessor:
         self.esp32_endpoint = (
             f"http://{os.getenv('ESP32_IP', '192.168.0.18')}/led-control"
         )
+        # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
+        esp32_api_key = os.getenv("ESP32_API_KEY", "")
+        self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
 
     def process_command(self, text):
         """Validate transcribed text, query LLM, validate response, forward to ESP32."""
@@ -102,6 +105,7 @@ class VoiceProcessor:
                     esp32_response = requests.post(
                         self.esp32_endpoint,
                         json=parsed_json,
+                        headers=self.esp32_headers,
                         timeout=self.config.network.connection_timeout,
                     )
                     esp32_response.raise_for_status()

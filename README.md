@@ -29,6 +29,12 @@ cd clank
 
 # set your ESP32 IP and fire it up
 export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
+
+# optional but recommended: shared API key for ESP32 authentication
+# generate: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# paste the same value into API_KEY in ESP32LEDs.ino before flashing
+export ESP32_API_KEY=your-generated-key-here
+
 python3 src/voicecommand/voice_LED_control.py
 ```
 
@@ -51,9 +57,10 @@ pip install -r requirements.txt
 # verify integrity
 sha256sum -c SHA256SUMS   # prints "OK" twice
 
-# set your ESP32 IP and Ollama model
-export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
-export LLM_MODEL=qwen3:14b     # optional: change Ollama model
+# set your ESP32 IP, API key, and Ollama model
+export ESP32_IP=192.168.0.18      # replace with your ESP32's IP
+export ESP32_API_KEY=your-key     # must match API_KEY in ESP32LEDs.ino
+export LLM_MODEL=qwen3:14b        # optional: change Ollama model
 
 # fire it up
 python3 src/voicecommand/voice_LED_control.py

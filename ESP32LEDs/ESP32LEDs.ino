@@ -6,8 +6,13 @@
 // baud 115200
 
 // WiFi credentials — set before flashing, or use a provisioning method
-const char* ssid = "";
+const char* ssid     = "";
 const char* password = "";
+
+// Shared API key — must match ESP32_API_KEY env var on the Python side.
+// Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+// Leave empty ("") to disable authentication (not recommended).
+const char* API_KEY = "";
 
 // mDNS hostname — device will be reachable at clank-led.local
 const char* MDNS_HOSTNAME = "clank-led";
@@ -19,14 +24,30 @@ const int BLUE_LED_PIN  = 16;  // GPIO16
 
 WebServer server(80);
 
+// ---------- helpers ----------
+
+// Returns true if the request carries a valid API key.
+// Authentication is skipped when API_KEY is empty (dev/testing only).
+bool isAuthenticated() {
+  if (strlen(API_KEY) == 0) return true;
+  if (!server.hasHeader("X-API-Key")) return false;
+  return server.header("X-API-Key") == String(API_KEY);
+}
+
 // ---------- handlers ----------
 
 void handleHealth() {
-  // Clank discovery service checks GET /health for {"service":"clank-led"}
+  // Public endpoint — no auth required.
+  // Clank discovery service checks GET /health for {"service":"clank-led"}.
   server.send(200, "application/json", "{\"service\":\"clank-led\",\"status\":\"ok\"}");
 }
 
 void handleLedControl() {
+  if (!isAuthenticated()) {
+    server.send(401, "text/plain", "Authentication failed");
+    return;
+  }
+
   if (!server.hasArg("plain")) {
     server.send(400, "text/plain", "No data received");
     return;
@@ -101,6 +122,10 @@ void setup() {
   } else {
     Serial.println("mDNS failed to start");
   }
+
+  // Collect the X-API-Key header
+  const char* collectHeaders[] = {"X-API-Key"};
+  server.collectHeaders(collectHeaders, 1);
 
   server.on("/health",      HTTP_GET,  handleHealth);
   server.on("/led-control", HTTP_POST, handleLedControl);
