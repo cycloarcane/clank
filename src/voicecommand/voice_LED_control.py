@@ -11,24 +11,18 @@ from silero_vad import VADIterator, load_silero_vad
 from sounddevice import InputStream
 from tokenizers import Tokenizer
 
-# Local import of Moonshine ONNX model
+# Local imports — src/ is added so voicecommand.* sub-modules resolve
 CLANK_MOONSHINE_DEMO_DIR = os.path.dirname(__file__)
-sys.path.append(os.path.join(CLANK_MOONSHINE_DEMO_DIR, ".."))
+sys.path.insert(0, os.path.join(CLANK_MOONSHINE_DEMO_DIR, ".."))
 from onnx_model import MoonshineOnnxModel
+from voicecommand.config import ClankConfig
+from voicecommand.validation import CommandValidator, ValidationError
+from voicecommand.secure_logging import setup_secure_logging
 
 SAMPLING_RATE = 16000
 CHUNK_SIZE = 512
 LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
-MIN_REFRESH_SECS = 0.2
-
-# ESP32 Configuration
-ESP32_IP = os.getenv("ESP32_IP", "192.168.0.18")  # Set via environment variable or default
-ESP32_ENDPOINT = f"http://{ESP32_IP}/led-control"
-
-# LLM API Configuration (Ollama)
-LLM_ENDPOINT = "http://127.0.0.1:11434/api/generate"
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:14b")  # Set via environment variable or default
 
 SYSTEM_PROMPT = """/nothink You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
@@ -55,71 +49,76 @@ For non-LED commands, respond with:
 
 Remember: Return EXACTLY ONE JSON object with no additional text or markers."""
 
-class VoiceProcessor:
-    def __init__(self, model_name):
-        self.transcriber = Transcriber(model_name=model_name, rate=SAMPLING_RATE)
-        self.logger = logging.getLogger("VoiceProcessor")
 
-    def extract_json_from_text(self, text):
-        """Extract the first valid JSON object from text"""
-        try:
-            # Find the first { and last } in the text
-            start = text.find('{')
-            end = text.rfind('}')
-            if start != -1 and end != -1:
-                json_str = text[start:end + 1]
-                return json.loads(json_str)
-        except json.JSONDecodeError:
-            return None
-        return None
+class VoiceProcessor:
+    def __init__(self, model_name, config, logger):
+        self.transcriber = Transcriber(model_name=model_name, rate=SAMPLING_RATE)
+        self.validator = CommandValidator()
+        self.config = config
+        self.logger = logger
+        self.esp32_endpoint = (
+            f"http://{os.getenv('ESP32_IP', '192.168.0.18')}/led-control"
+        )
+        # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
+        esp32_api_key = os.getenv("ESP32_API_KEY", "")
+        self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
 
     def process_command(self, text):
-        """Send transcribed text to LLM and forward response to ESP32"""
+        """Validate transcribed text, query LLM, validate response, forward to ESP32."""
+        # Sanitize and validate the transcription before it touches the LLM prompt
         try:
-            # First get command from LLM (Ollama format)
+            text = self.validator.validate_transcription(text)
+        except ValidationError as e:
+            self.logger.warning(f"Transcription validation failed: {e}")
+            return
+
+        try:
             payload = {
-                "model": LLM_MODEL,
+                "model": self.config.llm.model,
                 "prompt": f"{SYSTEM_PROMPT}\nUser command: {text}\nResponse:",
                 "stream": False,
                 "options": {
-                    "temperature": 0.0,
-                    "num_predict": 150
-                }
+                    "temperature": self.config.llm.temperature,
+                    "num_predict": self.config.llm.max_tokens,
+                },
             }
-            llm_response = requests.post(LLM_ENDPOINT, json=payload)
+            llm_response = requests.post(
+                self.config.llm.endpoint,
+                json=payload,
+                timeout=self.config.llm.timeout,
+            )
             llm_response.raise_for_status()
-            
-            print("\nLLM Response:")
-            print("-------------")
+
+            response_text = llm_response.json()["response"].strip()
+
+            # Validate and structurally check the LLM's JSON output
             try:
-                response_json = llm_response.json()
-                response_text = response_json['response'].strip()
-                parsed_json = self.extract_json_from_text(response_text)
-                if parsed_json:
-                    print(json.dumps(parsed_json, indent=2))
-                    
-                    # Forward the command to ESP32
-                    if parsed_json["action"] == "led_control":
-                        try:
-                            esp32_response = requests.post(ESP32_ENDPOINT, json=parsed_json)
-                            esp32_response.raise_for_status()
-                            print(f"ESP32 Response: {esp32_response.text}")
-                        except requests.exceptions.RequestException as e:
-                            print(f"Error sending command to ESP32: {e}")
-                else:
-                    print("Failed to parse JSON from response:")
-                    print(response_text)
-            except Exception as e:
-                print(f"Error processing response: {e}")
-                print("Raw response:", llm_response.text)
-            print("-------------\n")
-            
+                parsed_json = self.validator.validate_llm_response(response_text)
+            except ValidationError as e:
+                self.logger.warning(f"LLM response validation failed: {e}")
+                return
+
+            self.logger.info(f"Command parsed: {json.dumps(parsed_json)}")
+
+            if parsed_json["action"] == "led_control":
+                try:
+                    esp32_response = requests.post(
+                        self.esp32_endpoint,
+                        json=parsed_json,
+                        headers=self.esp32_headers,
+                        timeout=self.config.network.connection_timeout,
+                    )
+                    esp32_response.raise_for_status()
+                    self.logger.info(f"ESP32 response: {esp32_response.text}")
+                except requests.exceptions.RequestException as e:
+                    self.logger.error(f"Error sending command to ESP32: {e}")
+
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
 
+
 class Transcriber:
     def __init__(self, model_name, rate=16000):
-        # Use local secure models instead of downloading from HuggingFace Hub
         models_dir = os.path.join(
             CLANK_MOONSHINE_DEMO_DIR, "..", "..", "models", "moonshine"
         )
@@ -143,35 +142,43 @@ class Transcriber:
         self.inference_secs += time.time() - start_time
         return text
 
+
 def create_input_callback(q):
     def input_callback(data, frames, time, status):
         if status:
-            print(status)
-        q.put((data.copy().flatten(), status))
+            q.put((data.copy().flatten(), status))
+        else:
+            q.put((data.copy().flatten(), status))
     return input_callback
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Voice command system with LLM response debugging")
+    parser = argparse.ArgumentParser(description="Clank voice command system")
     parser.add_argument(
         "--model_name",
         default="moonshine/base",
         choices=["moonshine/base", "moonshine/tiny"],
     )
+    parser.add_argument("--config", help="Path to configuration file")
     args = parser.parse_args()
 
-    # Setup logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+    # Load config (falls back to defaults if file not found)
+    config = ClankConfig(args.config)
+    config.ensure_directories()
 
-    # Initialize components
-    voice_processor = VoiceProcessor(args.model_name)
-    
+    # Structured rotating-file + audit logging
+    logger, audit_logger, _ = setup_secure_logging(config)
+
+    logger.info("Starting Clank voice command system")
+
+    voice_processor = VoiceProcessor(args.model_name, config, logger)
+
     vad_model = load_silero_vad(onnx=True)
     vad_iterator = VADIterator(
         model=vad_model,
         sampling_rate=SAMPLING_RATE,
-        threshold=0.5,
-        min_silence_duration_ms=300,
+        threshold=config.audio.vad_threshold,
+        min_silence_duration_ms=config.audio.min_silence_duration_ms,
     )
 
     q = Queue()
@@ -187,9 +194,8 @@ def main():
     recording = False
     lookback_size = LOOKBACK_CHUNKS * CHUNK_SIZE
 
-    print("Voice command system started. Press Ctrl+C to quit.")
-    print("Speak commands and see raw LLM responses.")
-    
+    logger.info("Listening. Press Ctrl+C to quit.")
+
     stream.start()
     with stream:
         try:
@@ -206,11 +212,9 @@ def main():
                 if speech_dict:
                     if "start" in speech_dict and not recording:
                         recording = True
-                        start_time = time.time()
 
                     if "end" in speech_dict and recording:
                         recording = False
-                        # Process the complete utterance
                         text = voice_processor.transcriber(speech)
                         logger.info(f"Transcribed: {text}")
                         voice_processor.process_command(text)
@@ -227,7 +231,9 @@ def main():
 
         except KeyboardInterrupt:
             logger.info("Shutting down...")
+            audit_logger.stop()
             stream.close()
+
 
 if __name__ == "__main__":
     main()

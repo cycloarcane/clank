@@ -13,6 +13,8 @@ It relies on the **Moonshine** speech‑to‑text model, **Ollama** for intent p
 - **Ollama** installed and running: `ollama serve`
 - A model pulled: `ollama pull qwen3:14b` (or your preferred model)
 - **ESP32** with LED firmware running on your network
+  - Requires the **ESPmDNS** library (bundled with the ESP32 Arduino core)
+  - Fill in your WiFi credentials in `ESP32LEDs/ESP32LEDs.ino` before flashing
 
 ## Quick‑start
 
@@ -27,6 +29,12 @@ cd clank
 
 # set your ESP32 IP and fire it up
 export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
+
+# optional but recommended: shared API key for ESP32 authentication
+# generate: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# paste the same value into API_KEY in ESP32LEDs.ino before flashing
+export ESP32_API_KEY=your-generated-key-here
+
 python3 src/voicecommand/voice_LED_control.py
 ```
 
@@ -49,9 +57,10 @@ pip install -r requirements.txt
 # verify integrity
 sha256sum -c SHA256SUMS   # prints "OK" twice
 
-# set your ESP32 IP and Ollama model
-export ESP32_IP=192.168.0.18  # replace with your ESP32's IP
-export LLM_MODEL=qwen3:14b     # optional: change Ollama model
+# set your ESP32 IP, API key, and Ollama model
+export ESP32_IP=192.168.0.18      # replace with your ESP32's IP
+export ESP32_API_KEY=your-key     # must match API_KEY in ESP32LEDs.ino
+export LLM_MODEL=qwen3:14b        # optional: change Ollama model
 
 # fire it up
 python3 src/voicecommand/voice_LED_control.py
@@ -66,6 +75,8 @@ clank/
 ├─ README.md               ← *this file*
 ├─ requirements.txt        ← Python dependencies
 ├─ SHA256SUMS              ← model digests you can re‑check anytime
+├─ config/
+│   └─ default.yaml        ← all tunable settings (audio, LLM, security, logging)
 ├─ scripts/
 │   └─ fetch_moonshine.sh  ← downloads the exact weights we audited
 ├─ models/
@@ -76,21 +87,30 @@ clank/
 │   ├─ assets/
 │   │   └─ tokenizer.json  ← Moonshine tokenizer
 │   └─ voicecommand/
-│       ├─ voice_LED_control.py ← main application
-│       └─ onnx_model.py   ← security-hardened model wrapper
+│       ├─ voice_LED_control.py    ← main application
+│       ├─ onnx_model.py           ← SHA256-verified model wrapper
+│       ├─ config.py               ← typed config with env-var overrides
+│       ├─ validation.py           ← input/output sanitisation & allowlists
+│       ├─ auth.py                 ← device registration & API key management
+│       ├─ discovery.py            ← mDNS auto-discovery of ESP32 devices
+│       └─ secure_logging.py       ← rotating logs + audit log with redaction
 └─ ESP32LEDs/              ← micro‑controller firmware
+    └─ ESP32LEDs.ino       ← GET /health + POST /led-control + mDNS advertising
 ```
 
 ---
 
 ## Security Features
 
-Clank implements multiple layers of security for the AI models:
+Clank implements multiple layers of security:
 
 - **Commit-locked downloads**: Only the audited `2501abf` commit is downloaded
-- **SHA256 verification**: All models are integrity-checked before loading  
+- **SHA256 verification**: All models are integrity-checked before loading
 - **No runtime downloads**: The application only uses pre-verified local models
 - **Official library integration**: Uses UsefulSensors' official moonshine-onnx library with local model loading
+- **Input validation**: Transcribed text is sanitised and length-bounded before being inserted into the LLM prompt, mitigating prompt injection via crafted audio
+- **LLM response validation**: JSON returned by Ollama is structurally validated against an allowlist of actions, colours, and states before being forwarded to the ESP32
+- **Structured logging**: Rotating file + separate audit log with automatic redaction of sensitive fields (API keys, tokens, IPs)
 
 ## Model provenance & supply‑chain hardening
 
