@@ -2,30 +2,35 @@
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
 
-// HTTPS server — install "esp32_https_server" by Frank Hessel via the
-// Arduino Library Manager (Sketch -> Include Library -> Manage Libraries).
-#include <HTTPSServer.hpp>
-#include <SSLCert.hpp>
-#include <HTTPRequest.hpp>
-#include <HTTPResponse.hpp>
+// HTTPS server from ESP-IDF, bundled with ESP32 Arduino core 3.x — no extra
+// library to install.
+#include <esp_https_server.h>
 
-// TLS certificate + private key, as DER byte arrays.
+// TLS certificate + private key, as PEM strings.
 // Generate before flashing:  python3 scripts/generate_esp32_cert.py --ip <device-ip>
 // cert.h contains the private key and must never be committed (see .gitignore).
 #include "cert.h"
 
-using namespace httpsserver;
+// WiFi credentials + API key. Copy secrets.h.example to secrets.h and fill in.
+// secrets.h is gitignored so credentials are never committed.
+#include "secrets.h"
 
 // baud 115200
 
-// WiFi credentials — set before flashing, or use a provisioning method
-const char* ssid     = "";
-const char* password = "";
+// WiFi credentials (from secrets.h)
+const char* ssid     = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
-// Shared API key — must match ESP32_API_KEY env var on the Python side.
-// Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-// Leave empty ("") to disable authentication (not recommended).
-const char* API_KEY = "";
+// Static IP on the host hotspot subnet. Fixed up front so the TLS certificate
+// can pin this address before the device is ever flashed. gateway_IP is the
+// host AP (NetworkManager "shared" default is 10.42.0.1).
+IPAddress local_IP(10, 42, 0, 50);
+IPAddress gateway_IP(10, 42, 0, 1);
+IPAddress subnet_mask(255, 255, 255, 0);
+
+// Shared API key (from secrets.h) — must match ESP32_API_KEY on the Python side.
+// Leave empty ("") in secrets.h to disable authentication (not recommended).
+const char* API_KEY = CLANK_API_KEY;
 
 // mDNS hostname — device will be reachable at clank-led.local
 const char* MDNS_HOSTNAME = "clank-led";
@@ -35,16 +40,12 @@ const int RED_LED_PIN   = 18;  // GPIO18
 const int GREEN_LED_PIN = 23;  // GPIO23
 const int BLUE_LED_PIN  = 16;  // GPIO16
 
-// HTTPS on the standard TLS port. The cert/key come from cert.h.
-SSLCert    cert((unsigned char*)clank_cert_der, clank_cert_der_len,
-                (unsigned char*)clank_key_der,  clank_key_der_len);
-HTTPSServer secureServer(&cert, 443);
+httpd_handle_t server = NULL;
 
 // ---------- rate limiting ----------
 // Sliding-window limiter: at most RATE_LIMIT_MAX requests per
 // RATE_LIMIT_WINDOW_MS. Applied to /led-control before authentication so
-// it also throttles API-key brute-force attempts. The server handles one
-// client at a time, so a single global window is sufficient.
+// it also throttles API-key brute-force attempts.
 const int           RATE_LIMIT_MAX       = 60;       // requests per window
 const unsigned long RATE_LIMIT_WINDOW_MS = 60000UL;  // 60 seconds
 
@@ -56,7 +57,6 @@ int           requestCount = 0;
 bool rateLimitAllow() {
   unsigned long now = millis();
 
-  // Drop timestamps that have aged out of the window (compact in place).
   int kept = 0;
   for (int i = 0; i < requestCount; i++) {
     if (now - requestTimes[i] < RATE_LIMIT_WINDOW_MS) {
@@ -76,73 +76,82 @@ bool rateLimitAllow() {
 // Returns true if the request carries a valid API key.
 // Authentication is skipped when API_KEY is empty (dev/testing only).
 // Uses a constant-time comparison to avoid leaking the key via timing.
-bool isAuthenticated(HTTPRequest* req) {
+bool isAuthenticated(httpd_req_t* req) {
   if (strlen(API_KEY) == 0) return true;
 
-  std::string provided = req->getHeader("X-API-Key");
-  size_t keyLen = strlen(API_KEY);
+  size_t hlen = httpd_req_get_hdr_value_len(req, "X-API-Key");
+  if (hlen == 0) return false;
+
+  char provided[160];
+  if (hlen >= sizeof(provided)) return false;
+  if (httpd_req_get_hdr_value_str(req, "X-API-Key", provided, sizeof(provided)) != ESP_OK) {
+    return false;
+  }
+
+  size_t keyLen  = strlen(API_KEY);
+  size_t provLen = strlen(provided);
 
   // Constant-time compare: always scan the full key length and fold any
   // length mismatch into the result so timing does not reveal the key.
-  unsigned char diff = (unsigned char)(provided.length() ^ keyLen);
+  unsigned char diff = (unsigned char)(provLen ^ keyLen);
   for (size_t i = 0; i < keyLen; i++) {
-    char p = (i < provided.length()) ? provided[i] : 0;
+    char p = (i < provLen) ? provided[i] : 0;
     diff |= (unsigned char)(p ^ API_KEY[i]);
   }
   return diff == 0;
 }
 
-void sendText(HTTPResponse* res, int code, const char* status, const char* body) {
-  res->setStatusCode(code);
-  res->setStatusText(status);
-  res->setHeader("Content-Type", "text/plain");
-  res->print(body);
+esp_err_t sendText(httpd_req_t* req, const char* status, const char* body) {
+  httpd_resp_set_status(req, status);
+  httpd_resp_set_type(req, "text/plain");
+  return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
 // ---------- handlers ----------
 
-void handleHealth(HTTPRequest* req, HTTPResponse* res) {
+esp_err_t handleHealth(httpd_req_t* req) {
   // Public endpoint — no auth required.
   // Clank discovery service checks GET /health for {"service":"clank-led"}.
-  res->setStatusCode(200);
-  res->setHeader("Content-Type", "application/json");
-  res->print("{\"service\":\"clank-led\",\"status\":\"ok\"}");
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, "{\"service\":\"clank-led\",\"status\":\"ok\"}",
+                         HTTPD_RESP_USE_STRLEN);
 }
 
-void handleLedControl(HTTPRequest* req, HTTPResponse* res) {
+esp_err_t handleLedControl(httpd_req_t* req) {
   if (!rateLimitAllow()) {
-    sendText(res, 429, "Too Many Requests", "Rate limit exceeded");
-    return;
+    return sendText(req, "429 Too Many Requests", "Rate limit exceeded");
   }
 
   if (!isAuthenticated(req)) {
-    sendText(res, 401, "Unauthorized", "Authentication failed");
-    return;
+    return sendText(req, "401 Unauthorized", "Authentication failed");
   }
 
   // Read the request body (bounded — the command JSON is tiny).
-  byte   buffer[256];
-  size_t idx = 0;
-  while (!req->requestComplete() && idx < sizeof(buffer)) {
-    idx += req->readBytes(buffer + idx, sizeof(buffer) - idx);
+  int total = req->content_len;
+  if (total <= 0 || total > 255) {
+    return sendText(req, "400 Bad Request", "No data received");
   }
-  req->discardRequestBody();
 
-  if (idx == 0) {
-    sendText(res, 400, "Bad Request", "No data received");
-    return;
+  char buf[256];
+  int received = 0;
+  while (received < total) {
+    int r = httpd_req_recv(req, buf + received, total - received);
+    if (r <= 0) {
+      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      return ESP_FAIL;
+    }
+    received += r;
   }
+  buf[received] = '\0';
 
   StaticJsonDocument<200> doc;
-  DeserializationError error = deserializeJson(doc, buffer, idx);
+  DeserializationError error = deserializeJson(doc, buf, received);
   if (error) {
-    sendText(res, 400, "Bad Request", "Invalid JSON");
-    return;
+    return sendText(req, "400 Bad Request", "Invalid JSON");
   }
 
   if (doc["action"] != "led_control") {
-    sendText(res, 400, "Bad Request", "Unknown action");
-    return;
+    return sendText(req, "400 Bad Request", "Unknown action");
   }
 
   const char* color      = doc["parameters"]["color"] | "";
@@ -167,10 +176,38 @@ void handleLedControl(HTTPRequest* req, HTTPResponse* res) {
     }
   }
 
-  sendText(res, 200, "OK", "Command processed");
+  return sendText(req, "200 OK", "Command processed");
 }
 
 // ---------- setup / loop ----------
+
+void startHttpsServer() {
+  httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
+  conf.servercert     = (const uint8_t*)clank_cert_pem;
+  conf.servercert_len = strlen(clank_cert_pem) + 1;   // mbedtls PEM needs the NUL
+  conf.prvtkey_pem    = (const uint8_t*)clank_key_pem;
+  conf.prvtkey_len    = strlen(clank_key_pem) + 1;
+  conf.port_secure    = 443;
+  conf.httpd.stack_size = 10240;  // TLS handshake needs a larger task stack
+
+  esp_err_t ret = httpd_ssl_start(&server, &conf);
+  if (ret != ESP_OK) {
+    Serial.printf("HTTPS server failed to start (err 0x%x)\n", ret);
+    return;
+  }
+
+  httpd_uri_t led_uri = {
+    .uri = "/led-control", .method = HTTP_POST, .handler = handleLedControl, .user_ctx = NULL
+  };
+  httpd_register_uri_handler(server, &led_uri);
+
+  httpd_uri_t health_uri = {
+    .uri = "/health", .method = HTTP_GET, .handler = handleHealth, .user_ctx = NULL
+  };
+  httpd_register_uri_handler(server, &health_uri);
+
+  Serial.println("HTTPS server started on port 443");
+}
 
 void setup() {
   Serial.begin(115200);
@@ -184,7 +221,10 @@ void setup() {
   digitalWrite(GREEN_LED_PIN, HIGH);
   digitalWrite(BLUE_LED_PIN,  HIGH);
 
-  // Connect to WiFi
+  // Connect to WiFi using the fixed static IP (pinned by the certificate).
+  if (!WiFi.config(local_IP, gateway_IP, subnet_mask, gateway_IP)) {
+    Serial.println("Static IP configuration failed");
+  }
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -203,18 +243,10 @@ void setup() {
     Serial.println("mDNS failed to start");
   }
 
-  // Register routes and start the HTTPS server.
-  secureServer.registerNode(new ResourceNode("/health",      "GET",  &handleHealth));
-  secureServer.registerNode(new ResourceNode("/led-control", "POST", &handleLedControl));
-  secureServer.start();
-
-  if (secureServer.isRunning()) {
-    Serial.println("HTTPS server started on port 443");
-  } else {
-    Serial.println("HTTPS server failed to start");
-  }
+  startHttpsServer();
 }
 
 void loop() {
-  secureServer.loop();
+  // The HTTPS server runs in its own FreeRTOS task; nothing to do here.
+  delay(1000);
 }

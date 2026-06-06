@@ -23,6 +23,9 @@ certs/
 # Generated ESP32 firmware cert header — contains the device's private key
 ESP32LEDs/cert.h
 
+# ESP32 WiFi credentials + API key (committed template: secrets.h.example)
+ESP32LEDs/secrets.h
+
 # Model weights — large binaries, fetched by scripts/fetch_moonshine.sh
 models/
 

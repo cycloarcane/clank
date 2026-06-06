@@ -135,27 +135,23 @@ sha256sum -c SHA256SUMS    # both lines should print OK
 
 ## Step 4 — Flash the ESP32 firmware
 
-The firmware serves **HTTPS** and will not compile until its TLS certificate header exists. Do these two prerequisites first:
+The firmware serves **HTTPS** and will not compile until two gitignored headers exist: your credentials (`secrets.h`) and the TLS certificate (`cert.h`). Do these prerequisites first:
 
-1. **Generate the API key** (full details in [Step 5](#step-5--generate-an-api-key)):
+1. **Create `secrets.h`** from the template and fill in your WiFi credentials and an API key:
    ```bash
+   cp ESP32LEDs/secrets.h.example ESP32LEDs/secrets.h
+   # generate a key for CLANK_API_KEY:
    python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   # then edit ESP32LEDs/secrets.h and set WIFI_SSID, WIFI_PASSWORD, CLANK_API_KEY
    ```
-2. **Generate the TLS certificate** — this writes `ESP32LEDs/cert.h` (used by the firmware) and `certs/esp32.crt` (pinned by Clank). Pass the device's LAN IP so it lands in the certificate:
+   > `secrets.h` is gitignored — your credentials are never committed. A non-empty `CLANK_API_KEY` enables authentication; leaving it `""` disables auth (dev/testing only).
+2. **Generate the TLS certificate** — writes `ESP32LEDs/cert.h` (firmware) and `certs/esp32.crt` (pinned by Clank). Pass the device's LAN IP so it lands in the certificate:
    ```bash
    python3 scripts/generate_esp32_cert.py --ip 192.168.0.18
    ```
    > `cert.h` contains the device's private key and is gitignored — never commit it. If the ESP32's IP changes, re-run this and re-flash.
 
-Then open `ESP32LEDs/ESP32LEDs.ino` and fill in three values:
-
-```cpp
-const char* ssid     = "YourWiFiNetwork";
-const char* password = "YourWiFiPassword";
-const char* API_KEY  = "paste-the-key-from-step-1";
-```
-
-Setting a non-empty `API_KEY` enables authentication. Leaving it `""` disables auth (dev/testing only — not recommended).
+> **Static IP (optional but recommended).** The cert is pinned to one IP, so a stable address is convenient. Either reserve a DHCP lease on your router, or set a static IP in the firmware (see the `WiFi.config(...)` call and `local_IP` near the top of `ESP32LEDs.ino`).
 
 ### Option A — Arduino IDE 2.x
 
@@ -170,11 +166,9 @@ Setting a non-empty `API_KEY` enables authentication. Leaving it `""` disables a
 3. **Install the ESP32 core.**
    Open *Tools → Board → Boards Manager*, search for `esp32` by Espressif, and click **Install**.
 
-4. **Install the required libraries.**
-   Open *Sketch → Include Library → Manage Libraries* and install both:
-   - `ArduinoJson` by Benoit Blanchon (version 6.x)
-   - `esp32_https_server` by Frank Hessel (provides the TLS web server)
-   > `WiFi` and `ESPmDNS` are included with the ESP32 core — no separate install needed.
+4. **Install the ArduinoJson library.**
+   Open *Sketch → Include Library → Manage Libraries*, search for `ArduinoJson` by Benoit Blanchon, and install it (v6.x or 7.x).
+   > `WiFi`, `ESPmDNS`, and the TLS server (`esp_https_server`) all ship with the **ESP32 core 3.x** — no separate library needed. (Requires core **3.x**; the older `esp32_https_server` library is not used.)
 
 5. **Open the sketch.**
    *File → Open* → navigate to `ESP32LEDs/ESP32LEDs.ino`.
@@ -204,11 +198,11 @@ Setting a non-empty `API_KEY` enables authentication. Leaving it `""` disables a
    arduino-cli core update-index
    ```
 
-3. **Install the ESP32 core and required libraries.**
+3. **Install the ESP32 core (3.x) and ArduinoJson.**
    ```bash
    arduino-cli core install esp32:esp32
    arduino-cli lib install "ArduinoJson"
-   arduino-cli lib install "esp32_https_server"
+   # the TLS server (esp_https_server) ships with the ESP32 core — no extra lib
    ```
 
 4. **Find your ESP32's port.**
@@ -576,7 +570,9 @@ clank/
 │       └── secure_logging.py            ← rotating logs and audit log with redaction
 │
 └── ESP32LEDs/
-    ├── ESP32LEDs.ino            ← ESP32 firmware (HTTPS server, mDNS, auth, rate limiting)
+    ├── ESP32LEDs.ino            ← ESP32 firmware (HTTPS via esp_https_server, mDNS, auth, rate limiting)
+    ├── secrets.h.example        ← template for WiFi creds + API key (copy to secrets.h)
+    ├── secrets.h                ← your WiFi creds + API key (gitignored)
     └── cert.h                   ← generated TLS cert/key for the firmware (gitignored)
 ```
 
