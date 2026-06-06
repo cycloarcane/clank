@@ -42,7 +42,7 @@ Microphone ──► Silero VAD ──► Moonshine STT ──► Ollama LLM ─
 1. **Voice activity detection** (Silero VAD) watches the microphone and fires when speech starts and ends.
 2. **Transcription** (Moonshine ONNX, local) converts the audio to text.
 3. **Intent parsing** (Ollama, local) maps the text to a structured JSON LED command.
-4. **Dispatch** — the validated JSON is POSTed to the ESP32 over HTTP with an API key header.
+4. **Dispatch** — the validated JSON is POSTed to the ESP32 over **HTTPS (TLS)** with an API key header. The client pins the device's self-signed certificate, and the ESP32 enforces rate limiting and a constant-time API-key check.
 
 ---
 
@@ -98,11 +98,21 @@ pip install -r requirements.txt
    ```bash
    ollama serve
    ```
-3. Pull the recommended model (≈8 GB download):
+3. Pull the recommended model:
    ```bash
-   ollama pull qwen3:14b
+   ollama pull qwen3:4b
    ```
-   Any model that reliably outputs clean JSON works. Smaller models like `qwen3:4b` or `llama3.2:3b` run faster on modest hardware.
+   The intent-parsing task is simple (one short sentence → a fixed JSON schema), so a small model is plenty. `qwen3:4b` (~2.5 GB at Q4) fits comfortably on a **4 GB GPU**, which is the recommended default.
+
+   **Choosing a Qwen3 model for your hardware:**
+
+   | GPU VRAM | Suggested model | Approx. size |
+   |---|---|---|
+   | ~4 GB | `qwen3:4b` | ~2.5 GB |
+   | ≤2 GB / CPU-only | `qwen3:1.7b` | ~1.4 GB |
+   | 12 GB+ | `qwen3:14b` (higher accuracy) | ~9 GB |
+
+   Any model that reliably outputs clean JSON works. **`qwen3:14b` will not fit in 4 GB of VRAM** — only choose it if you have a larger GPU.
 
 ---
 
@@ -125,15 +135,27 @@ sha256sum -c SHA256SUMS    # both lines should print OK
 
 ## Step 4 — Flash the ESP32 firmware
 
-The firmware lives at `ESP32LEDs/ESP32LEDs.ino`. Before flashing, open the file and fill in three values:
+The firmware serves **HTTPS** and will not compile until its TLS certificate header exists. Do these two prerequisites first:
+
+1. **Generate the API key** (full details in [Step 5](#step-5--generate-an-api-key)):
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+2. **Generate the TLS certificate** — this writes `ESP32LEDs/cert.h` (used by the firmware) and `certs/esp32.crt` (pinned by Clank). Pass the device's LAN IP so it lands in the certificate:
+   ```bash
+   python3 scripts/generate_esp32_cert.py --ip 192.168.0.18
+   ```
+   > `cert.h` contains the device's private key and is gitignored — never commit it. If the ESP32's IP changes, re-run this and re-flash.
+
+Then open `ESP32LEDs/ESP32LEDs.ino` and fill in three values:
 
 ```cpp
 const char* ssid     = "YourWiFiNetwork";
 const char* password = "YourWiFiPassword";
-const char* API_KEY  = "";   // fill in after Step 5
+const char* API_KEY  = "paste-the-key-from-step-1";
 ```
 
-Leave `API_KEY` empty for now — you will generate it in Step 5 and re-flash (or update via serial monitor).
+Setting a non-empty `API_KEY` enables authentication. Leaving it `""` disables auth (dev/testing only — not recommended).
 
 ### Option A — Arduino IDE 2.x
 
@@ -148,9 +170,11 @@ Leave `API_KEY` empty for now — you will generate it in Step 5 and re-flash (o
 3. **Install the ESP32 core.**
    Open *Tools → Board → Boards Manager*, search for `esp32` by Espressif, and click **Install**.
 
-4. **Install the ArduinoJson library.**
-   Open *Sketch → Include Library → Manage Libraries*, search for `ArduinoJson` by Benoit Blanchon, and click **Install** (version 6.x).
-   > `WiFi`, `WebServer`, and `ESPmDNS` are included with the ESP32 core — no separate install needed.
+4. **Install the required libraries.**
+   Open *Sketch → Include Library → Manage Libraries* and install both:
+   - `ArduinoJson` by Benoit Blanchon (version 6.x)
+   - `esp32_https_server` by Frank Hessel (provides the TLS web server)
+   > `WiFi` and `ESPmDNS` are included with the ESP32 core — no separate install needed.
 
 5. **Open the sketch.**
    *File → Open* → navigate to `ESP32LEDs/ESP32LEDs.ino`.
@@ -180,10 +204,11 @@ Leave `API_KEY` empty for now — you will generate it in Step 5 and re-flash (o
    arduino-cli core update-index
    ```
 
-3. **Install the ESP32 core and ArduinoJson library.**
+3. **Install the ESP32 core and required libraries.**
    ```bash
    arduino-cli core install esp32:esp32
    arduino-cli lib install "ArduinoJson"
+   arduino-cli lib install "esp32_https_server"
    ```
 
 4. **Find your ESP32's port.**
@@ -254,8 +279,11 @@ export ESP32_IP=192.168.0.18
 # Required: the API key you generated in Step 5
 export ESP32_API_KEY=K3dRm9vXpQlTnYwZ8uBfA2sGcHeJiOkV1yMqCrNxDtL
 
-# Optional: change the Ollama model (default: qwen3:14b)
-export LLM_MODEL=qwen3:14b
+# Required for HTTPS: the pinned ESP32 certificate from Step 4
+export ESP32_CA_CERT=certs/esp32.crt
+
+# Optional: change the Ollama model (default: qwen3:4b)
+export CLANK_LLM_MODEL=qwen3:4b
 
 python3 src/voicecommand/voice_LED_control.py
 ```
@@ -266,7 +294,8 @@ Or use the startup script, which loads variables from a `.env` file automaticall
 cat > .env <<'EOF'
 ESP32_IP=192.168.0.18
 ESP32_API_KEY=your-key-here
-LLM_MODEL=qwen3:14b
+ESP32_CA_CERT=certs/esp32.crt
+CLANK_LLM_MODEL=qwen3:4b
 EOF
 
 ./start_clank.sh
@@ -302,12 +331,14 @@ All settings live in `config/default.yaml` and can be overridden by environment 
 |---|---|---|
 | `ESP32_IP` | `192.168.0.18` | IP address of the ESP32 |
 | `ESP32_API_KEY` | *(none)* | Shared API key for ESP32 authentication |
-| `LLM_MODEL` | `qwen3:14b` | Ollama model name |
+| `ESP32_CA_CERT` | *(none)* | Path to the pinned ESP32 certificate (`certs/esp32.crt`). When set, Clank connects over **HTTPS** and verifies against it. |
+| `ESP32_USE_HTTPS` | `false` | Force HTTPS even without a pinned cert (uses system trust — generally only useful for testing). |
+| `CLANK_LLM_MODEL` | `qwen3:4b` | Ollama model name |
 | `CLANK_CONFIG` | `config/default.yaml` | Path to config file |
 | `CLANK_LLM_ENDPOINT` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
 | `CLANK_LOG_LEVEL` | `INFO` | Log level (DEBUG / INFO / WARNING / ERROR) |
-| `CLANK_HTTPS_CERT` | *(none)* | Path to TLS certificate for HTTPS |
-| `CLANK_HTTPS_KEY` | *(none)* | Path to TLS private key for HTTPS |
+
+If neither `ESP32_CA_CERT` nor `ESP32_USE_HTTPS` is set, Clank falls back to plain HTTP — use this only with the legacy non-TLS firmware.
 
 ### config/default.yaml (key sections)
 
@@ -319,10 +350,12 @@ audio:
   max_speech_seconds: 15
 
 llm:
-  model: "qwen3:14b"
+  model: "qwen3:4b"
   temperature: 0.0
   max_tokens: 150
   timeout: 30.0
+  response_format: "json"   # force a single valid JSON object
+  think: false              # disable qwen3 "thinking" (set null for non-reasoning models)
 
 network:
   use_service_discovery: true  # auto-discover ESP32 via mDNS
@@ -333,14 +366,14 @@ security:
   enable_audit_logging: true
 ```
 
-### Generating HTTPS certificates (optional)
+### Regenerating the ESP32 TLS certificate
 
-If you want to encrypt traffic between Clank and the ESP32 (requires HTTPS support on the ESP32 side):
+The ESP32 serves HTTPS with a self-signed certificate that Clank pins. The certificate is generated in [Step 4](#step-4--flash-the-esp32-firmware) and bound to the device's IP. Regenerate it whenever the ESP32's IP changes, then **re-flash the firmware** (the cert is embedded in `cert.h`):
 ```bash
-python3 scripts/generate_certs.py --hostname clank-led.local
-export CLANK_HTTPS_CERT=certs/server.crt
-export CLANK_HTTPS_KEY=certs/server.key
+python3 scripts/generate_esp32_cert.py --ip <device-ip>
+export ESP32_CA_CERT=certs/esp32.crt
 ```
+This writes `ESP32LEDs/cert.h` (firmware) and `certs/esp32.crt` (pinned by Clank). Both are gitignored.
 
 ---
 
@@ -400,10 +433,11 @@ Sensitive fields (API keys, tokens, IP addresses) are automatically redacted in 
 | **No network calls at runtime** | All AI runs locally; no data leaves the machine |
 | **Input validation** | Transcribed text is sanitised and length-bounded before reaching the LLM prompt, preventing prompt injection via crafted audio |
 | **LLM response validation** | JSON output is checked against an allowlist of valid actions, colours, and states before dispatch |
-| **ESP32 authentication** | `POST /led-control` requires a matching `X-API-Key` header; unauthenticated requests get 401 |
-| **mDNS device discovery** | ESP32 advertises `_clank-led._tcp` so Clank finds it without hardcoded IPs |
+| **HTTPS (TLS) transport** | The ESP32 serves HTTPS; Clank connects over TLS and pins the device's self-signed certificate (`ESP32_CA_CERT`) |
+| **ESP32 authentication** | `POST /led-control` requires a matching `X-API-Key` header (constant-time comparison); unauthenticated requests get 401 |
+| **Rate limiting** | 60 requests per minute, enforced **on the ESP32** before authentication (throttles brute-force); excess requests get 429 |
+| **mDNS device discovery** | ESP32 advertises `_clank-led._tcp` (with a `secure` TXT record) so Clank finds it without hardcoded IPs |
 | **Structured audit logging** | Security events written to a separate JSON log with automatic redaction |
-| **Rate limiting** | 60 requests per minute per client IP |
 
 ---
 
@@ -526,14 +560,14 @@ clank/
 │
 ├── scripts/
 │   ├── fetch_moonshine.sh       ← downloads pinned, verified model weights
-│   └── generate_certs.py        ← generates self-signed TLS certificates
+│   ├── generate_esp32_cert.py   ← generates the ESP32 TLS cert (cert.h + esp32.crt)
+│   └── generate_certs.py        ← generic self-signed cert helper
 │
 ├── src/
 │   ├── assets/
 │   │   └── tokenizer.json       ← Moonshine subword tokenizer
 │   └── voicecommand/
 │       ├── voice_LED_control.py         ← main application entry point
-│       ├── voice_LED_control_secure.py  ← security framework stub (in progress)
 │       ├── onnx_model.py                ← SHA256-verified model loader
 │       ├── config.py                    ← typed config with env-var overrides
 │       ├── validation.py                ← input/output sanitisation and allowlists
@@ -542,7 +576,8 @@ clank/
 │       └── secure_logging.py            ← rotating logs and audit log with redaction
 │
 └── ESP32LEDs/
-    └── ESP32LEDs.ino            ← ESP32 firmware (HTTP server, mDNS, auth)
+    ├── ESP32LEDs.ino            ← ESP32 firmware (HTTPS server, mDNS, auth, rate limiting)
+    └── cert.h                   ← generated TLS cert/key for the firmware (gitignored)
 ```
 
 ---

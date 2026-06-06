@@ -29,10 +29,15 @@ network:
 # LLM Settings
 llm:
   endpoint: "http://127.0.0.1:11434/api/generate"
-  model: "qwen3:14b"
+  model: "qwen3:4b"
   temperature: 0.0
   max_tokens: 150
   timeout: 30.0
+  # Force Ollama to return one valid JSON object.
+  response_format: "json"
+  # Disable "thinking" for reasoning models (required for qwen3 via Ollama).
+  # Set to null for models that don't support a think parameter.
+  think: false
   
 # Model Settings  
 models:

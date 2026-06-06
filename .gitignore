@@ -11,8 +11,17 @@ build/
 .env
 .env.*
 
+# Registered device API keys — stored in plaintext, never commit
+config/devices.json
+
+# Local hardware inventory — not part of the project
+component_inventory.json
+
 # TLS certificates and keys — never commit private keys
 certs/
+
+# Generated ESP32 firmware cert header — contains the device's private key
+ESP32LEDs/cert.h
 
 # Model weights — large binaries, fetched by scripts/fetch_moonshine.sh
 models/

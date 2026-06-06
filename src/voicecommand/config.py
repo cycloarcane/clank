@@ -37,10 +37,16 @@ class NetworkConfig:
 @dataclass
 class LLMConfig:
     endpoint: str = "http://127.0.0.1:11434/api/generate"
-    model: str = "qwen3:14b"
+    model: str = "qwen3:4b"
     temperature: float = 0.0
     max_tokens: int = 150
     timeout: float = 30.0
+    # Force Ollama to emit a single valid JSON object (structured output).
+    response_format: str = "json"
+    # Disable reasoning models' "thinking" so the token budget produces the
+    # answer, not hidden reasoning. Required for the qwen3 family via Ollama.
+    # Set to null in config for models that do not support a think parameter.
+    think: Optional[bool] = False
 
 @dataclass
 class ModelConfig:

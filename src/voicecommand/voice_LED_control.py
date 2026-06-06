@@ -24,7 +24,7 @@ CHUNK_SIZE = 512
 LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
 
-SYSTEM_PROMPT = """/nothink You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+SYSTEM_PROMPT = """/no_think You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
 Commands can include:
 - Turning individual LEDs on/off: "Computer turn on red LED"
@@ -56,9 +56,32 @@ class VoiceProcessor:
         self.validator = CommandValidator()
         self.config = config
         self.logger = logger
-        self.esp32_endpoint = (
-            f"http://{os.getenv('ESP32_IP', '192.168.0.18')}/led-control"
+
+        esp32_ip = os.getenv("ESP32_IP", "192.168.0.18")
+        # HTTPS is used when a pinned CA cert is provided (ESP32_CA_CERT), or
+        # forced with ESP32_USE_HTTPS=true. The cert is generated alongside the
+        # firmware by scripts/generate_esp32_cert.py.
+        ca_cert = os.getenv("ESP32_CA_CERT", "")
+        use_https = bool(ca_cert) or os.getenv("ESP32_USE_HTTPS", "").lower() in (
+            "1", "true", "yes", "on"
         )
+
+        if use_https:
+            self.esp32_endpoint = f"https://{esp32_ip}/led-control"
+            # Pin to the device's self-signed cert when supplied; otherwise fall
+            # back to default verification (and warn — this will likely fail for
+            # a self-signed device, which is the point: don't silently skip TLS).
+            self.esp32_verify = ca_cert if ca_cert else True
+            if not ca_cert:
+                self.logger.warning(
+                    "ESP32_USE_HTTPS set without ESP32_CA_CERT; TLS verification "
+                    "will use system trust and likely reject the device cert. "
+                    "Set ESP32_CA_CERT to the pinned certificate."
+                )
+        else:
+            self.esp32_endpoint = f"http://{esp32_ip}/led-control"
+            self.esp32_verify = True
+
         # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
         esp32_api_key = os.getenv("ESP32_API_KEY", "")
         self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
@@ -82,6 +105,12 @@ class VoiceProcessor:
                     "num_predict": self.config.llm.max_tokens,
                 },
             }
+            # Structured output: force a single valid JSON object so reasoning
+            # models can't bury the answer in prose or hidden "thinking".
+            if self.config.llm.response_format:
+                payload["format"] = self.config.llm.response_format
+            if self.config.llm.think is not None:
+                payload["think"] = self.config.llm.think
             llm_response = requests.post(
                 self.config.llm.endpoint,
                 json=payload,
@@ -107,6 +136,7 @@ class VoiceProcessor:
                         json=parsed_json,
                         headers=self.esp32_headers,
                         timeout=self.config.network.connection_timeout,
+                        verify=self.esp32_verify,
                     )
                     esp32_response.raise_for_status()
                     self.logger.info(f"ESP32 response: {esp32_response.text}")
