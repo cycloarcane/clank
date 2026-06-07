@@ -61,6 +61,26 @@ void setRelay(int pin, bool on) {
 #endif
 }
 
+// Read back a pin's logical on/off state (digitalRead returns the output latch
+// for OUTPUT pins on ESP32), accounting for active-low wiring.
+bool loadIsOn(int pin) {
+#if RELAY_ACTIVE_LOW
+  return digitalRead(pin) == LOW;
+#else
+  return digitalRead(pin) == HIGH;
+#endif
+}
+
+// Print the current state of every load to the serial monitor.
+void printStatus() {
+  Serial.println(F("---- Load status ----"));
+  for (int i = 0; i < NUM_LOADS; i++) {
+    Serial.printf("  %-12s (GPIO%2d): %s\n",
+                  LOADS[i].name, LOADS[i].pin, loadIsOn(LOADS[i].pin) ? "ON" : "OFF");
+  }
+  Serial.println(F("---------------------"));
+}
+
 httpd_handle_t server = NULL;
 
 // ---------- rate limiting ----------
@@ -165,13 +185,18 @@ esp_err_t handleLedControl(httpd_req_t* req) {
   }
   buf[received] = '\0';
 
+  // Echo the raw command to the serial monitor for debugging.
+  Serial.printf("RX /led-control: %s\n", buf);
+
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, buf, received);
   if (error) {
+    Serial.println(F("  -> rejected: invalid JSON"));
     return sendText(req, "400 Bad Request", "Invalid JSON");
   }
 
   if (doc["action"] != "set_load") {
+    Serial.println(F("  -> rejected: unknown action"));
     return sendText(req, "400 Bad Request", "Unknown action");
   }
 
@@ -182,16 +207,21 @@ esp_err_t handleLedControl(httpd_req_t* req) {
   // "all" toggles every known load; otherwise match a single named load.
   if (strcmp(load, "all") == 0) {
     for (int i = 0; i < NUM_LOADS; i++) setRelay(LOADS[i].pin, isOn);
+    Serial.printf("  -> set all = %s\n", isOn ? "ON" : "OFF");
+    printStatus();
     return sendText(req, "200 OK", "Command processed");
   }
 
   for (int i = 0; i < NUM_LOADS; i++) {
     if (strcmp(load, LOADS[i].name) == 0) {
       setRelay(LOADS[i].pin, isOn);
+      Serial.printf("  -> set %s = %s\n", LOADS[i].name, isOn ? "ON" : "OFF");
+      printStatus();
       return sendText(req, "200 OK", "Command processed");
     }
   }
 
+  Serial.printf("  -> rejected: unknown load '%s'\n", load);
   return sendText(req, "400 Bad Request", "Unknown load");
 }
 
@@ -234,6 +264,8 @@ void setup() {
     pinMode(LOADS[i].pin, OUTPUT);
     setRelay(LOADS[i].pin, false);
   }
+  Serial.println(F("\nBoot: all loads initialised OFF"));
+  printStatus();
 
   // Connect to WiFi using the fixed static IP (pinned by the certificate).
   if (!WiFi.config(local_IP, gateway_IP, subnet_mask, gateway_IP)) {
