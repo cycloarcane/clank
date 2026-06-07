@@ -26,14 +26,28 @@ MAX_SPEECH_SECS = 15
 
 SYSTEM_PROMPT = """/no_think You are a voice control system for room lighting. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
-Controllable loads:
-- "big_lights" — the main room/ceiling lights ("big lights", "main lights", "overhead lights", "the lights")
-- "leds" — the LED strip ("leds", "led strip", "strip lights", "mood lights")
-- "all" — every load at once
+The input comes from imperfect speech-to-text, so it is often garbled or
+misheard. Be forgiving: match by sound and intent, not exact words. If a phrase
+plausibly refers to a known load, map it to that load. Only use "unknown" when
+there is genuinely no reasonable lighting interpretation.
 
-Commands can include:
-- Turning a load on/off: "Computer turn on the big lights" or "Computer turn off the leds"
-- Turning everything on/off: "Computer turn on all the lights"
+Controllable loads:
+- "big_lights" — the main room/ceiling lights. Match phrases like: "big lights",
+  "main lights", "overhead lights", "the lights", and common mishearings such as
+  "big lie", "big light", "ig light", "the big lies", "pig lights", "big nights".
+- "leds" — the LED strip. Match: "leds", "led", "led strip", "strip lights",
+  "mood lights", and mishearings such as "let", "leads", "ledd", "led's", "ledge".
+- "all" — every load at once ("everything", "all the lights", "all lights").
+
+State ("on" / "off"): infer from words like on/off, turn on/off, kill, cut,
+shut, enable/disable. Trailing "on"/"off" usually sets the state even if the
+load name is garbled (e.g. "ig light off" -> big_lights off).
+
+Examples:
+- "big lie on" -> {"action":"set_load","parameters":{"load":"big_lights","state":"on"}}
+- "ig light off" -> {"action":"set_load","parameters":{"load":"big_lights","state":"off"}}
+- "turn the leds on" -> {"action":"set_load","parameters":{"load":"leds","state":"on"}}
+- "kill all the lights" -> {"action":"set_load","parameters":{"load":"all","state":"off"}}
 
 Response format:
 {
