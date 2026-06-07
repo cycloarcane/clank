@@ -17,6 +17,11 @@ class AudioConfig:
     min_refresh_seconds: float = 0.2
     vad_threshold: float = 0.5
     min_silence_duration_ms: int = 300
+    # Wake word: utterances that don't begin with (a near-match of) this word
+    # are discarded without being sent to the LLM, logged, or retained. Set
+    # require_wake_word False to act on every utterance (less private).
+    wake_word: str = "clank"
+    require_wake_word: bool = True
 
 @dataclass
 class SecurityConfig:
@@ -26,6 +31,10 @@ class SecurityConfig:
     max_requests_per_minute: int = 60
     max_audio_processing_time: int = 30
     enable_audit_logging: bool = True
+    # Privacy: when False (default), raw transcripts are NEVER logged or
+    # persisted — only resolved commands (load -> state) are recorded, so
+    # non-command speech leaves no trace. Set True only for debugging.
+    log_transcripts: bool = False
 
 @dataclass
 class NetworkConfig:

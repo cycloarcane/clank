@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import json
+import difflib
 import logging
 import requests
 from queue import Queue
@@ -107,6 +108,38 @@ class VoiceProcessor:
         # lingering in keep-alive and blocking the next command.
         self.esp32_headers["Connection"] = "close"
 
+        # Wake word + privacy settings.
+        self.wake_word = config.audio.wake_word.lower().strip()
+        self.require_wake_word = config.audio.require_wake_word
+        self.log_transcripts = config.security.log_transcripts
+        # Common STT mishearings of the wake word, so a garbled "clank" still
+        # triggers. Fuzzy matching below catches the rest.
+        # Only genuine phonetic near-misses of "clank". Note the fuzzy match
+        # below (ratio >= 0.72) already catches most of these; real words that
+        # merely rhyme (e.g. "thank", "tank") are deliberately excluded so
+        # everyday speech like "thank you" doesn't wake the system.
+        self.wake_aliases = {
+            self.wake_word, "clank", "clink", "clunk", "klank", "clang",
+            "clack", "crank", "blank", "plank", "flank",
+        }
+
+    def _strip_wake_word(self, text):
+        """Detect the wake word and return (heard, command_text).
+
+        Scans tokens for an exact alias or a close phonetic match (handles STT
+        mishearings like 'clink'/'crank'/'blank'). On a hit, everything after
+        the wake word is the command; text before/including it is dropped.
+        """
+        tokens = text.split()
+        for i, tok in enumerate(tokens):
+            t = tok.lower().strip(".,!?;:'\"")
+            if (
+                t in self.wake_aliases
+                or difflib.SequenceMatcher(None, t, self.wake_word).ratio() >= 0.72
+            ):
+                return True, " ".join(tokens[i + 1:]).strip()
+        return False, ""
+
     def process_command(self, text):
         """Validate transcribed text, query LLM, validate response, forward to ESP32."""
         # Sanitize and validate the transcription before it touches the LLM prompt
@@ -115,6 +148,24 @@ class VoiceProcessor:
         except ValidationError as e:
             self.logger.warning(f"Transcription validation failed: {e}")
             return
+
+        # Wake-word gate. If the utterance isn't addressed to us, discard it
+        # here — no LLM call, no logging of content, nothing retained. This is
+        # what keeps everyday speech ephemeral.
+        if self.require_wake_word:
+            heard, command_text = self._strip_wake_word(text)
+            if not heard:
+                self.logger.debug("No wake word; utterance discarded")
+                return
+            if not command_text:
+                self.logger.debug("Wake word only; no command")
+                return
+            text = command_text
+
+        # Only now — once we know this is addressed to us — may we log the
+        # transcript, and only if explicitly enabled for debugging.
+        if self.log_transcripts:
+            self.logger.info(f"Command transcript: {text}")
 
         try:
             payload = {
@@ -148,9 +199,13 @@ class VoiceProcessor:
                 self.logger.warning(f"LLM response validation failed: {e}")
                 return
 
-            self.logger.info(f"Command parsed: {json.dumps(parsed_json)}")
-
             if parsed_json["action"] == "set_load":
+                params = parsed_json["parameters"]
+                # Log the resolved command (load -> state), never the raw
+                # speech. This is the only command record kept by default.
+                self.logger.info(
+                    f"Command: {params['load']} -> {params['state']}"
+                )
                 # One retry: a single TLS/WiFi latency spike shouldn't drop a
                 # command. The ESP32 action is idempotent (set on/off), so
                 # re-sending is safe.
@@ -279,8 +334,11 @@ def main():
 
                     if "end" in speech_dict and recording:
                         recording = False
+                        # Raw transcript stays local and is discarded after
+                        # process_command returns — it is never logged here.
+                        # Wake-word gating + transcript logging live inside
+                        # process_command so non-command speech leaves no trace.
                         text = voice_processor.transcriber(speech)
-                        logger.info(f"Transcribed: {text}")
                         voice_processor.process_command(text)
                         speech = np.empty(0, dtype=np.float32)
 
@@ -288,7 +346,6 @@ def main():
                     if (len(speech) / SAMPLING_RATE) > MAX_SPEECH_SECS:
                         recording = False
                         text = voice_processor.transcriber(speech)
-                        logger.info(f"Transcribed (max length): {text}")
                         voice_processor.process_command(text)
                         speech = np.empty(0, dtype=np.float32)
                         vad_iterator.reset_states()
