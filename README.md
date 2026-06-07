@@ -8,6 +8,19 @@ Everything runs on your own hardware — no cloud APIs, no external data sent an
 
 ---
 
+## ⚠️ Disclaimer
+
+Clank is a hobby project provided **as-is, with no warranty** of any kind. You run it entirely at your own risk. Please understand the following before using it:
+
+- **Always-on microphone.** To detect its wake word, Clank continuously captures and transcribes audio from your microphone. Audio and transcripts are processed **locally, in memory, and discarded** — by default nothing is sent to the cloud and raw transcripts are not written to disk (only resolved commands are logged; see `security.log_transcripts`). Even so, you are running a device that is always listening.
+- **Other people's privacy.** Recording or transcribing people without their knowledge or consent may be illegal where you live (one-/two-party consent laws vary by jurisdiction). If others share the space, inform them. Compliance is **your responsibility**.
+- **Mains electricity is dangerous.** Switching 230/240 V (or 120 V) loads with relays or modified plugs can cause **electric shock, fire, or death** if done incorrectly. Use only properly rated, fused, and enclosed hardware — or commercial smart plugs — and consult a qualified electrician for any fixed wiring. The authors accept **no liability** for damage, injury, or loss resulting from use of this project.
+- **Not a safety device.** Do not use Clank to control anything where failure, a misheard command, or downtime could be hazardous (medical equipment, heating, security, etc.).
+
+By using Clank you accept these terms.
+
+---
+
 ## Table of contents
 
 1. [How it works](#how-it-works)
