@@ -22,6 +22,19 @@ class AudioConfig:
     # require_wake_word False to act on every utterance (less private).
     wake_word: str = "clank"
     require_wake_word: bool = True
+    # Wake detection engine:
+    #   "text"        — transcribe every utterance, then match the wake_word in
+    #                   the transcript (simple, but STT runs constantly).
+    #   "openwakeword"— a small acoustic model gates BEFORE transcription, so
+    #                   Moonshine stays idle until the wake word fires.
+    wake_engine: str = "text"
+    # openWakeWord settings (only used when wake_engine == "openwakeword").
+    # oww_model: a builtin name ("hey_jarvis", "alexa", "hey_mycroft",
+    # "hey_marvin") or a path to a custom-trained .onnx model.
+    oww_model: str = "hey_jarvis"
+    oww_threshold: float = 0.5
+    # Max seconds to wait for a command after the wake word fires.
+    command_timeout_s: float = 6.0
 
 @dataclass
 class SecurityConfig:

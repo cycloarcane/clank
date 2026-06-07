@@ -14,6 +14,15 @@ audio:
   # mishearings (clink/crank/blank...) still trigger.
   wake_word: "clank"
   require_wake_word: true
+  # Wake detection engine: "text" (transcribe-then-match) or "openwakeword"
+  # (acoustic model gates before STT — lower CPU, true capture gate).
+  wake_engine: "text"
+  # openWakeWord settings (used only when wake_engine == "openwakeword").
+  # oww_model: builtin name (hey_jarvis / alexa / hey_mycroft / hey_marvin)
+  # or a path to a custom-trained .onnx.
+  oww_model: "hey_jarvis"
+  oww_threshold: 0.5
+  command_timeout_s: 6.0
 
 # Security Settings
 security:
