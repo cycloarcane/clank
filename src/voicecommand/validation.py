@@ -48,9 +48,14 @@ class LEDCommand:
 class CommandValidator:
     """Validates and sanitizes voice commands."""
     
+    # Controllable loads — must match the LOADS table in the ESP32 firmware.
+    # "all" is accepted as a broadcast to every load.
+    VALID_LOADS = {"big_lights", "leds", "all"}
+    VALID_STATES = {"on", "off"}
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        
+
         # Patterns for malicious content detection
         self.malicious_patterns = [
             r'<script[^>]*>',  # Script tags
@@ -107,28 +112,50 @@ class CommandValidator:
             raise ValidationError("Action must be a string")
         
         # Validate action type
-        valid_actions = ["led_control", "unknown"]
+        valid_actions = ["set_load", "unknown"]
         if action not in valid_actions:
             raise ValidationError(f"Invalid action: {action}. Must be one of {valid_actions}")
-        
-        # Validate LED control parameters
-        if action == "led_control":
+
+        # Validate load-control parameters
+        if action == "set_load":
             if "parameters" not in data:
-                raise ValidationError("LED control action requires parameters")
-            
+                raise ValidationError("set_load action requires parameters")
+
             params = data["parameters"]
             if not isinstance(params, dict):
                 raise ValidationError("Parameters must be an object")
-            
-            return self._validate_led_parameters(params, data)
-        
+
+            return self._validate_load_parameters(params)
+
         # For unknown actions, just ensure no dangerous parameters
         elif action == "unknown":
             if "parameters" in data:
                 self._validate_safe_parameters(data["parameters"])
-        
+
         return data
     
+    def _validate_load_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate set_load parameters (load name + on/off state)."""
+        load = params.get("load")
+        if not isinstance(load, str):
+            raise ValidationError("load must be a string")
+        load = load.lower().strip()
+        if load not in self.VALID_LOADS:
+            raise ValidationError(
+                f"Invalid load: {load}. Must be one of {sorted(self.VALID_LOADS)}"
+            )
+
+        state = params.get("state")
+        if not isinstance(state, str):
+            raise ValidationError("state must be a string")
+        state = state.lower().strip()
+        if state not in self.VALID_STATES:
+            raise ValidationError(
+                f"Invalid state: {state}. Must be one of {sorted(self.VALID_STATES)}"
+            )
+
+        return {"action": "set_load", "parameters": {"load": load, "state": state}}
+
     def _validate_led_parameters(self, params: Dict[str, Any], full_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate LED control parameters."""
         validated_params = {}

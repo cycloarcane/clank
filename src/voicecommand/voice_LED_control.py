@@ -24,24 +24,27 @@ CHUNK_SIZE = 512
 LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
 
-SYSTEM_PROMPT = """/no_think You are a voice control system for LED lights. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+SYSTEM_PROMPT = """/no_think You are a voice control system for room lighting. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+
+Controllable loads:
+- "big_lights" — the main room/ceiling lights ("big lights", "main lights", "overhead lights", "the lights")
+- "leds" — the LED strip ("leds", "led strip", "strip lights", "mood lights")
+- "all" — every load at once
 
 Commands can include:
-- Turning individual LEDs on/off: "Computer turn on red LED"
-- Turning all LEDs on/off: "Computer turn on all LEDs" or "Computer turn off all LEDs"
-- Setting brightness: "Computer set blue LED to 50%"
+- Turning a load on/off: "Computer turn on the big lights" or "Computer turn off the leds"
+- Turning everything on/off: "Computer turn on all the lights"
 
 Response format:
 {
-    "action": "led_control",
+    "action": "set_load",
     "parameters": {
-        "color": string,  // The LED color (red, blue, green) OR "all" for all LEDs
-        "state": string,  // "on" or "off"
-        "brightness": number | null  // 0-100 if specified, null if not
+        "load": string,  // "big_lights", "leds", or "all"
+        "state": string  // "on" or "off"
     }
 }
 
-For non-LED commands, respond with:
+For commands that do not match a known load, respond with:
 {
     "action": "unknown",
     "parameters": {}
@@ -85,6 +88,10 @@ class VoiceProcessor:
         # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
         esp32_api_key = os.getenv("ESP32_API_KEY", "")
         self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
+        # The esp_https_server has very few concurrent TLS socket slots; ask it
+        # to close each connection so the slot is freed immediately instead of
+        # lingering in keep-alive and blocking the next command.
+        self.esp32_headers["Connection"] = "close"
 
     def process_command(self, text):
         """Validate transcribed text, query LLM, validate response, forward to ESP32."""
@@ -129,19 +136,32 @@ class VoiceProcessor:
 
             self.logger.info(f"Command parsed: {json.dumps(parsed_json)}")
 
-            if parsed_json["action"] == "led_control":
-                try:
-                    esp32_response = requests.post(
-                        self.esp32_endpoint,
-                        json=parsed_json,
-                        headers=self.esp32_headers,
-                        timeout=self.config.network.connection_timeout,
-                        verify=self.esp32_verify,
-                    )
-                    esp32_response.raise_for_status()
-                    self.logger.info(f"ESP32 response: {esp32_response.text}")
-                except requests.exceptions.RequestException as e:
-                    self.logger.error(f"Error sending command to ESP32: {e}")
+            if parsed_json["action"] == "set_load":
+                # One retry: a single TLS/WiFi latency spike shouldn't drop a
+                # command. The ESP32 action is idempotent (set on/off), so
+                # re-sending is safe.
+                last_err = None
+                for attempt in range(2):
+                    try:
+                        esp32_response = requests.post(
+                            self.esp32_endpoint,
+                            json=parsed_json,
+                            headers=self.esp32_headers,
+                            timeout=self.config.network.connection_timeout,
+                            verify=self.esp32_verify,
+                        )
+                        esp32_response.raise_for_status()
+                        self.logger.info(f"ESP32 response: {esp32_response.text}")
+                        last_err = None
+                        break
+                    except requests.exceptions.RequestException as e:
+                        last_err = e
+                        if attempt == 0:
+                            self.logger.warning(
+                                f"ESP32 request failed ({e}); retrying once"
+                            )
+                if last_err is not None:
+                    self.logger.error(f"Error sending command to ESP32: {last_err}")
 
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")

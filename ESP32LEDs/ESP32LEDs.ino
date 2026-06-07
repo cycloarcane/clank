@@ -35,10 +35,31 @@ const char* API_KEY = CLANK_API_KEY;
 // mDNS hostname — device will be reachable at clank-led.local
 const char* MDNS_HOSTNAME = "clank-led";
 
-// LED pins — adjust based on your wiring
-const int RED_LED_PIN   = 18;  // GPIO18
-const int GREEN_LED_PIN = 23;  // GPIO23
-const int BLUE_LED_PIN  = 16;  // GPIO16
+// Relay channels — named loads mapped to GPIO pins. The Python side sends a
+// load name ("big_lights"/"leds"); the firmware owns the name->pin mapping.
+// Most Songle/SRD relay boards are ACTIVE-LOW: GPIO LOW energises the relay.
+// Set RELAY_ACTIVE_LOW to 0 if yours is active-high.
+#define RELAY_ACTIVE_LOW 1
+
+struct Load {
+  const char* name;
+  int         pin;
+};
+
+Load LOADS[] = {
+  { "big_lights", 26 },  // relay IN1 -> GPIO26
+  { "leds",        2 },  // GPIO2 = onboard LED on most ESP32 dev boards (no wiring needed to test)
+};
+const int NUM_LOADS = sizeof(LOADS) / sizeof(LOADS[0]);
+
+// Drive a relay pin to the desired logical state, honouring active-low wiring.
+void setRelay(int pin, bool on) {
+#if RELAY_ACTIVE_LOW
+  digitalWrite(pin, on ? LOW : HIGH);
+#else
+  digitalWrite(pin, on ? HIGH : LOW);
+#endif
+}
 
 httpd_handle_t server = NULL;
 
@@ -150,33 +171,28 @@ esp_err_t handleLedControl(httpd_req_t* req) {
     return sendText(req, "400 Bad Request", "Invalid JSON");
   }
 
-  if (doc["action"] != "led_control") {
+  if (doc["action"] != "set_load") {
     return sendText(req, "400 Bad Request", "Unknown action");
   }
 
-  const char* color      = doc["parameters"]["color"] | "";
-  const char* state      = doc["parameters"]["state"] | "";
-  int         brightness = doc["parameters"]["brightness"] | -1;
+  const char* load  = doc["parameters"]["load"]  | "";
+  const char* state = doc["parameters"]["state"] | "";
+  bool isOn = (strcmp(state, "on") == 0);
 
-  // brightness > 0 counts as ON; brightness == 0 counts as OFF
-  bool isOn = (brightness > 0) || (strcmp(state, "on") == 0);
+  // "all" toggles every known load; otherwise match a single named load.
+  if (strcmp(load, "all") == 0) {
+    for (int i = 0; i < NUM_LOADS; i++) setRelay(LOADS[i].pin, isOn);
+    return sendText(req, "200 OK", "Command processed");
+  }
 
-  if (strcmp(color, "all") == 0 || strlen(color) == 0) {
-    digitalWrite(RED_LED_PIN,   isOn ? HIGH : LOW);
-    digitalWrite(GREEN_LED_PIN, isOn ? HIGH : LOW);
-    digitalWrite(BLUE_LED_PIN,  isOn ? HIGH : LOW);
-  } else {
-    int pin = -1;
-    if      (strcmp(color, "red")   == 0) pin = RED_LED_PIN;
-    else if (strcmp(color, "green") == 0) pin = GREEN_LED_PIN;
-    else if (strcmp(color, "blue")  == 0) pin = BLUE_LED_PIN;
-
-    if (pin >= 0) {
-      digitalWrite(pin, isOn ? HIGH : LOW);
+  for (int i = 0; i < NUM_LOADS; i++) {
+    if (strcmp(load, LOADS[i].name) == 0) {
+      setRelay(LOADS[i].pin, isOn);
+      return sendText(req, "200 OK", "Command processed");
     }
   }
 
-  return sendText(req, "200 OK", "Command processed");
+  return sendText(req, "400 Bad Request", "Unknown load");
 }
 
 // ---------- setup / loop ----------
@@ -212,14 +228,12 @@ void startHttpsServer() {
 void setup() {
   Serial.begin(115200);
 
-  pinMode(RED_LED_PIN,   OUTPUT);
-  pinMode(GREEN_LED_PIN, OUTPUT);
-  pinMode(BLUE_LED_PIN,  OUTPUT);
-
-  // All LEDs on at boot
-  digitalWrite(RED_LED_PIN,   HIGH);
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  digitalWrite(BLUE_LED_PIN,  HIGH);
+  // Initialise all relay pins OFF before driving them, so nothing switches on
+  // during boot/reset (important when mains loads are attached).
+  for (int i = 0; i < NUM_LOADS; i++) {
+    pinMode(LOADS[i].pin, OUTPUT);
+    setRelay(LOADS[i].pin, false);
+  }
 
   // Connect to WiFi using the fixed static IP (pinned by the certificate).
   if (!WiFi.config(local_IP, gateway_IP, subnet_mask, gateway_IP)) {
@@ -232,6 +246,14 @@ void setup() {
   }
   Serial.println("\nConnected to WiFi");
   Serial.println("IP address: " + WiFi.localIP().toString());
+
+  // Disable WiFi modem-sleep. By default the ESP32 powers the radio down
+  // between beacons, which adds hundreds of ms to seconds of latency to
+  // incoming connections — the usual cause of "works but regularly times out".
+  WiFi.setSleep(false);
+  // Reconnect automatically if the AP drops us, so a brief outage doesn't
+  // leave the device offline until the next manual reboot.
+  WiFi.setAutoReconnect(true);
 
   // Start mDNS — advertises _clank-led._tcp on the TLS port. The "secure"
   // TXT record tells Clank's discovery to use https.
