@@ -35,6 +35,13 @@ class AudioConfig:
     oww_threshold: float = 0.5
     # Max seconds to wait for a command after the wake word fires.
     command_timeout_s: float = 6.0
+    # Pre-roll: seconds of audio kept before the wake word fires and prepended
+    # to the captured command, so a fast command onset (e.g. "all") isn't
+    # clipped by wake-detection latency.
+    command_preroll_s: float = 0.5
+    # Debug: log the peak wake-word score once a second so you can see whether
+    # audio is reaching the model and how high it scores when you speak.
+    oww_debug: bool = False
 
 @dataclass
 class SecurityConfig:

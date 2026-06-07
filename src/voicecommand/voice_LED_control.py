@@ -408,6 +408,16 @@ def main():
         "--oww-model",
         help="Override audio.oww_model (builtin name or path to a .onnx)",
     )
+    parser.add_argument(
+        "--oww-threshold",
+        type=float,
+        help="Override audio.oww_threshold (0-1; lower = more sensitive)",
+    )
+    parser.add_argument(
+        "--oww-debug",
+        action="store_true",
+        help="Log the peak wake-word score each second (diagnostics)",
+    )
     args = parser.parse_args()
 
     # Load config (falls back to defaults if file not found)
@@ -419,6 +429,10 @@ def main():
         config.audio.wake_engine = args.wake_engine
     if args.oww_model:
         config.audio.oww_model = args.oww_model
+    if args.oww_threshold is not None:
+        config.audio.oww_threshold = args.oww_threshold
+    if args.oww_debug:
+        config.audio.oww_debug = True
 
     # Structured rotating-file + audit logging
     logger, audit_logger, _ = setup_secure_logging(config)
@@ -513,6 +527,25 @@ def run_wake_engine_loop(q, voice_processor, vad_iterator, config, logger):
     got_speech = False
     capture_start = 0.0
 
+    threshold = config.audio.oww_threshold
+    # Edge-trigger: fire once when the score crosses the threshold, then disarm
+    # until it decays back below rearm_threshold. The detector is fed EVERY
+    # frame (even while capturing a command) so its internal feature buffer
+    # never freezes on the wake word — that, plus disarming, is what stops the
+    # wake word's own lingering score from re-firing once we return to listening.
+    rearm_threshold = threshold * 0.5
+    armed = True
+
+    # Pre-roll buffer: the last command_preroll_s of audio before the wake
+    # fires, prepended to the capture so a fast command onset isn't clipped.
+    preroll_samples = int(config.audio.command_preroll_s * SAMPLING_RATE)
+    lookback = np.empty(0, dtype=np.float32)
+
+    debug = config.audio.oww_debug
+    peak_score = 0.0
+    peak_amp = 0.0
+    last_debug = time.time()
+
     logger.info("Listening for wake word. Press Ctrl+C to quit.")
 
     while True:
@@ -520,12 +553,35 @@ def run_wake_engine_loop(q, voice_processor, vad_iterator, config, logger):
         if status:
             logger.warning(f"Stream status: {status}")
 
+        # Always score, in both states, to keep the rolling buffer current.
+        score = detector.score(chunk)
+        if not armed and score < rearm_threshold:
+            armed = True
+
+        if debug:
+            peak_score = max(peak_score, score)
+            peak_amp = max(peak_amp, float(np.abs(chunk).max()))
+            now = time.time()
+            if now - last_debug >= 1.0:
+                logger.info(
+                    f"[oww] state={'LISTEN' if state == LISTENING else 'CAPTURE'} "
+                    f"armed={int(armed)} peak score={peak_score:.3f} "
+                    f"mic peak amp={peak_amp:.3f}"
+                )
+                peak_score = peak_amp = 0.0
+                last_debug = now
+
         if state == LISTENING:
-            if detector.score(chunk) >= config.audio.oww_threshold:
+            # Keep a rolling pre-roll of recent audio.
+            lookback = np.concatenate((lookback, chunk))[-preroll_samples:]
+            if armed and score >= threshold:
                 logger.info("Wake word detected")
-                detector.reset()
+                armed = False
                 vad_iterator.reset_states()
-                speech = np.empty(0, dtype=np.float32)
+                # Seed the capture with the pre-roll so the command onset that
+                # was spoken during wake-detection latency isn't lost.
+                speech = lookback.copy()
+                lookback = np.empty(0, dtype=np.float32)
                 got_speech = False
                 capture_start = time.time()
                 state = CAPTURING

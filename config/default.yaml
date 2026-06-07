@@ -23,6 +23,9 @@ audio:
   oww_model: "hey_jarvis"
   oww_threshold: 0.5
   command_timeout_s: 6.0
+  # Audio kept before the wake word fires and prepended to the command, so a
+  # fast onset (e.g. "all") isn't clipped by wake-detection latency.
+  command_preroll_s: 0.5
 
 # Security Settings
 security:
