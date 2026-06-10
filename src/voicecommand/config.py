@@ -64,7 +64,7 @@ class MqttConfig:
     # (MQTT_USER / MQTT_PASS), never the config file.
     broker_host: str = "127.0.0.1"
     broker_port: int = 1883
-    rgb_set_topic: str = "clank/rgb/set"
+    rgb_set_topic: str = "wled/clank/api"
 
 @dataclass
 class NetworkConfig:

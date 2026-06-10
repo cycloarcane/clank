@@ -18,7 +18,9 @@ CLANK_MOONSHINE_DEMO_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(CLANK_MOONSHINE_DEMO_DIR, ".."))
 from onnx_model import MoonshineOnnxModel
 from voicecommand.config import ClankConfig
-from voicecommand.validation import CommandValidator, ValidationError, COLOR_RGB
+from voicecommand.validation import (
+    CommandValidator, ValidationError, COLOR_RGB, WLED_EFFECTS
+)
 from voicecommand.secure_logging import setup_secure_logging
 
 SAMPLING_RATE = 16000
@@ -38,12 +40,16 @@ parameters the user actually asked for:
 - "color": one of red, green, blue, white, warm white, yellow, orange, amber,
   purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold
 - "brightness": integer 0-100 (a percentage)
+- "effect": one of solid, blink, breathe, fade, colorloop, rainbow, strobe,
+  candle. Use "solid" when the user wants a plain steady colour / "stop the
+  effect". Map intent: "pulse"/"breathing" -> breathe, "cycle colours" ->
+  colorloop, "flicker"/"candle light" -> candle, "flash" -> strobe.
 
 Phrases for the strip: "leds", "led", "led strip", "strip", "the lights",
 "the light", "mood lights", and mishearings such as "let", "leads", "ledd".
-Setting a colour or brightness implies the strip turns on, so you do not also
-need to add "state":"on" in that case. "dim" means lower brightness; "bright"
-or "full" means brightness 100.
+Setting a colour, brightness, or effect implies the strip turns on, so you do
+not also need to add "state":"on" in that case. "dim" means lower brightness;
+"bright" or "full" means brightness 100.
 
 State words: on/off, turn on/off, kill, cut, shut, enable/disable.
 
@@ -54,6 +60,10 @@ Examples:
 - "set the strip to blue" -> {"action":"set_rgb","parameters":{"color":"blue"}}
 - "dim the lights to 20 percent" -> {"action":"set_rgb","parameters":{"brightness":20}}
 - "warm white at half brightness" -> {"action":"set_rgb","parameters":{"color":"warm white","brightness":50}}
+- "make the lights breathe" -> {"action":"set_rgb","parameters":{"effect":"breathe"}}
+- "cycle through colours" -> {"action":"set_rgb","parameters":{"effect":"colorloop"}}
+- "candle mode in orange" -> {"action":"set_rgb","parameters":{"color":"orange","effect":"candle"}}
+- "stop the effect" -> {"action":"set_rgb","parameters":{"effect":"solid"}}
 
 Response format:
 {
@@ -302,23 +312,32 @@ class VoiceProcessor:
 
             elif parsed_json["action"] == "set_rgb":
                 params = parsed_json["parameters"]
-                # Build the compact MQTT payload the firmware expects, mapping
-                # the validated colour name -> RGB and brightness% -> 0-255.
-                mqtt_payload = {}
-                if "state" in params:
-                    mqtt_payload["state"] = params["state"].upper()
+                # Translate to WLED's JSON state API (published to wled/clank/api).
+                # Per-segment colour/effect go in "seg"; on/off and brightness are
+                # top-level. Any colour/brightness/effect implies the strip is on
+                # unless the user explicitly said "off".
+                wled = {}
+                seg = {}
                 if "color" in params:
-                    r, g, b = COLOR_RGB[params["color"]]
-                    mqtt_payload["r"], mqtt_payload["g"], mqtt_payload["b"] = r, g, b
+                    seg["col"] = [list(COLOR_RGB[params["color"]])]
+                if "effect" in params:
+                    seg["fx"] = WLED_EFFECTS[params["effect"]]
+                if seg:
+                    wled["seg"] = [seg]
                 if "brightness" in params:
-                    mqtt_payload["brightness"] = round(params["brightness"] * 255 / 100)
+                    wled["bri"] = round(params["brightness"] * 255 / 100)
+                state = params.get("state")
+                if state == "off":
+                    wled["on"] = False
+                elif state == "on" or seg or "brightness" in params:
+                    wled["on"] = True
 
                 # Log the resolved command (never the raw speech).
                 self.logger.info(f"Command(rgb): {params}")
                 if self.rgb is None:
                     self.logger.error("RGB command but MQTT controller is unavailable")
                 else:
-                    self.rgb.publish(mqtt_payload)
+                    self.rgb.publish(wled)
 
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
