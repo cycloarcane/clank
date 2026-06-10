@@ -35,6 +35,27 @@ COLOR_RGB = {
     "gold":      (255, 180,   0),
 }
 
+# Spoken effect name -> WLED effect (FX) ID. Limited to time-based effects that
+# render meaningfully on an analog/PWM strip (one virtual pixel): the whole
+# strip changes together over time. Spatial effects (wipe, chase, sparkle) are
+# excluded because they need addressable pixels to be visible.
+WLED_EFFECTS = {
+    "solid":     0,
+    "none":      0,
+    "steady":    0,
+    "blink":     1,
+    "breathe":   2,
+    "pulse":     2,
+    "fade":      12,
+    "colorloop": 8,
+    "color loop":8,
+    "cycle":     8,
+    "rainbow":   9,
+    "strobe":    23,
+    "candle":    88,
+    "flicker":   88,
+}
+
 class LEDColor(Enum):
     """Valid LED colors."""
     RED = "red"
@@ -229,9 +250,20 @@ class CommandValidator:
                 raise ValidationError("brightness must be between 0 and 100")
             validated["brightness"] = brightness
 
+        effect = params.get("effect")
+        if effect is not None:
+            if not isinstance(effect, str):
+                raise ValidationError("effect must be a string")
+            effect = effect.lower().strip()
+            if effect not in WLED_EFFECTS:
+                raise ValidationError(
+                    f"Invalid effect: {effect}. Must be one of {sorted(WLED_EFFECTS)}"
+                )
+            validated["effect"] = effect
+
         if not validated:
             raise ValidationError(
-                "set_rgb requires at least one of color, state, or brightness"
+                "set_rgb requires at least one of color, state, brightness, or effect"
             )
         return {"action": "set_rgb", "parameters": validated}
 
