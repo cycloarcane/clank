@@ -39,6 +39,14 @@ security:
   # only resolved commands (load -> state) are recorded. Set true to debug.
   log_transcripts: false
   
+# MQTT Settings — RGB LED strip control (ESP32 firmware subscribes to rgb_set_topic).
+# The broker (mosquitto) runs on this PC; the ESP32 connects to it at the
+# hotspot gateway 10.42.0.1. Credentials come from MQTT_USER / MQTT_PASS in .env.
+mqtt:
+  broker_host: "127.0.0.1"
+  broker_port: 1883
+  rgb_set_topic: "clank/rgb/set"
+
 # Network Settings
 network:
   use_service_discovery: true
@@ -52,7 +60,7 @@ llm:
   model: "qwen3:4b"
   temperature: 0.0
   max_tokens: 150
-  timeout: 30.0
+  timeout: 90.0
   # Force Ollama to return one valid JSON object.
   response_format: "json"
   # Disable "thinking" for reasoning models (required for qwen3 via Ollama).

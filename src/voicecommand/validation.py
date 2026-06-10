@@ -11,6 +11,30 @@ class ValidationError(Exception):
     """Custom exception for validation errors."""
     pass
 
+# Canonical colour palette for the RGB strip. The validator enforces that a
+# requested colour is one of these names; the control layer maps the name to
+# these 8-bit (R, G, B) channel values before publishing over MQTT. Keep the
+# names in sync with the colour list in the LLM system prompt.
+COLOR_RGB = {
+    "red":       (255,   0,   0),
+    "green":     (0,   255,   0),
+    "blue":      (0,     0, 255),
+    "white":     (255, 255, 255),
+    "warm white":(255, 170,  90),
+    "yellow":    (255, 200,   0),
+    "orange":    (255,  80,   0),
+    "amber":     (255, 120,   0),
+    "purple":    (140,   0, 255),
+    "violet":    (140,   0, 255),
+    "pink":      (255,  40, 130),
+    "magenta":   (255,   0, 255),
+    "cyan":      (0,   255, 255),
+    "teal":      (0,   200, 160),
+    "turquoise": (0,   220, 200),
+    "lime":      (160, 255,   0),
+    "gold":      (255, 180,   0),
+}
+
 class LEDColor(Enum):
     """Valid LED colors."""
     RED = "red"
@@ -112,7 +136,7 @@ class CommandValidator:
             raise ValidationError("Action must be a string")
         
         # Validate action type
-        valid_actions = ["set_load", "unknown"]
+        valid_actions = ["set_load", "set_rgb", "unknown"]
         if action not in valid_actions:
             raise ValidationError(f"Invalid action: {action}. Must be one of {valid_actions}")
 
@@ -126,6 +150,17 @@ class CommandValidator:
                 raise ValidationError("Parameters must be an object")
 
             return self._validate_load_parameters(params)
+
+        # Validate RGB-strip parameters
+        if action == "set_rgb":
+            if "parameters" not in data:
+                raise ValidationError("set_rgb action requires parameters")
+
+            params = data["parameters"]
+            if not isinstance(params, dict):
+                raise ValidationError("Parameters must be an object")
+
+            return self._validate_rgb_parameters(params)
 
         # For unknown actions, just ensure no dangerous parameters
         elif action == "unknown":
@@ -155,6 +190,50 @@ class CommandValidator:
             )
 
         return {"action": "set_load", "parameters": {"load": load, "state": state}}
+
+    def _validate_rgb_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate set_rgb parameters (any of colour / on-off state / brightness).
+
+        All three are optional, but at least one must be present. Colour must be
+        a known palette name; brightness is a 0-100 percentage."""
+        validated: Dict[str, Any] = {}
+
+        color = params.get("color")
+        if color is not None:
+            if not isinstance(color, str):
+                raise ValidationError("color must be a string")
+            color = color.lower().strip()
+            if color not in COLOR_RGB:
+                raise ValidationError(
+                    f"Invalid color: {color}. Must be one of {sorted(COLOR_RGB)}"
+                )
+            validated["color"] = color
+
+        state = params.get("state")
+        if state is not None:
+            if not isinstance(state, str):
+                raise ValidationError("state must be a string")
+            state = state.lower().strip()
+            if state not in self.VALID_STATES:
+                raise ValidationError(
+                    f"Invalid state: {state}. Must be one of {sorted(self.VALID_STATES)}"
+                )
+            validated["state"] = state
+
+        brightness = params.get("brightness")
+        if brightness is not None:
+            if not isinstance(brightness, (int, float)) or isinstance(brightness, bool):
+                raise ValidationError("brightness must be a number")
+            brightness = int(brightness)
+            if brightness < 0 or brightness > 100:
+                raise ValidationError("brightness must be between 0 and 100")
+            validated["brightness"] = brightness
+
+        if not validated:
+            raise ValidationError(
+                "set_rgb requires at least one of color, state, or brightness"
+            )
+        return {"action": "set_rgb", "parameters": validated}
 
     def _validate_led_parameters(self, params: Dict[str, Any], full_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate LED control parameters."""

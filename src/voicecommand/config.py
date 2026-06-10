@@ -57,6 +57,16 @@ class SecurityConfig:
     log_transcripts: bool = False
 
 @dataclass
+class MqttConfig:
+    # The broker runs on this PC (also the host hotspot gateway), so the
+    # Python side connects over loopback. The ESP32 reaches the same broker at
+    # the hotspot address 10.42.0.1. Credentials come from the environment
+    # (MQTT_USER / MQTT_PASS), never the config file.
+    broker_host: str = "127.0.0.1"
+    broker_port: int = 1883
+    rgb_set_topic: str = "clank/rgb/set"
+
+@dataclass
 class NetworkConfig:
     use_service_discovery: bool = True
     mdns_service_name: str = "_clank-led._tcp.local"
@@ -69,7 +79,7 @@ class LLMConfig:
     model: str = "qwen3:4b"
     temperature: float = 0.0
     max_tokens: int = 150
-    timeout: float = 30.0
+    timeout: float = 90.0
     # Force Ollama to emit a single valid JSON object (structured output).
     response_format: str = "json"
     # Disable reasoning models' "thinking" so the token budget produces the
@@ -98,6 +108,7 @@ class ClankConfig:
         self.config_path = config_path or self._find_config_file()
         self.audio = AudioConfig()
         self.security = SecurityConfig()
+        self.mqtt = MqttConfig()
         self.network = NetworkConfig()
         self.llm = LLMConfig()
         self.models = ModelConfig()
@@ -139,6 +150,8 @@ class ClankConfig:
                 self._update_dataclass(self.audio, config_data['audio'])
             if 'security' in config_data:
                 self._update_dataclass(self.security, config_data['security'])
+            if 'mqtt' in config_data:
+                self._update_dataclass(self.mqtt, config_data['mqtt'])
             if 'network' in config_data:
                 self._update_dataclass(self.network, config_data['network'])
             if 'llm' in config_data:

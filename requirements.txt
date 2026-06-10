@@ -31,6 +31,10 @@ zeroconf>=0.127.0
 # TLS certificate generation and HTTPS to the ESP32 (scripts/generate_certs.py)
 cryptography>=41.0.0
 
+# MQTT client for RGB LED-strip control — publishes to the local mosquitto
+# broker that the ESP32 firmware subscribes to (voicecommand RgbMqttController).
+paho-mqtt>=2.1.0
+
 # System dependencies that may need to be installed via system package manager:
 # - libsndfile1 (for sounddevice)
 # - portaudio19-dev (for sounddevice)

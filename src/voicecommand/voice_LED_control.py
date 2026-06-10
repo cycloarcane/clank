@@ -18,7 +18,7 @@ CLANK_MOONSHINE_DEMO_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(CLANK_MOONSHINE_DEMO_DIR, ".."))
 from onnx_model import MoonshineOnnxModel
 from voicecommand.config import ClankConfig
-from voicecommand.validation import CommandValidator, ValidationError
+from voicecommand.validation import CommandValidator, ValidationError, COLOR_RGB
 from voicecommand.secure_logging import setup_secure_logging
 
 SAMPLING_RATE = 16000
@@ -26,47 +26,99 @@ CHUNK_SIZE = 512
 LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
 
-SYSTEM_PROMPT = """/no_think You are a voice control system for room lighting. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+SYSTEM_PROMPT = """/no_think You are a voice control system for an RGB LED light strip. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
 The input comes from imperfect speech-to-text, so it is often garbled or
-misheard. Be forgiving: match by sound and intent, not exact words. If a phrase
-plausibly refers to a known load, map it to that load. Only use "unknown" when
-there is genuinely no reasonable lighting interpretation.
+misheard. Be forgiving: match by sound and intent, not exact words. Only use
+"unknown" when there is genuinely no reasonable lighting interpretation.
 
-Controllable loads:
-- "big_lights" — the main room/ceiling lights. Match phrases like: "big lights",
-  "main lights", "overhead lights", "the lights", and common mishearings such as
-  "big lie", "big light", "ig light", "the big lies", "pig lights", "big nights".
-- "leds" — the LED strip. Match: "leds", "led", "led strip", "strip lights",
-  "mood lights", and mishearings such as "let", "leads", "ledd", "led's", "ledge".
-- "all" — every load at once ("everything", "all the lights", "all lights").
+You control ONE RGB LED strip. The action is always "set_rgb". Include only the
+parameters the user actually asked for:
+- "state": "on" or "off"
+- "color": one of red, green, blue, white, warm white, yellow, orange, amber,
+  purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold
+- "brightness": integer 0-100 (a percentage)
 
-State ("on" / "off"): infer from words like on/off, turn on/off, kill, cut,
-shut, enable/disable. Trailing "on"/"off" usually sets the state even if the
-load name is garbled (e.g. "ig light off" -> big_lights off).
+Phrases for the strip: "leds", "led", "led strip", "strip", "the lights",
+"the light", "mood lights", and mishearings such as "let", "leads", "ledd".
+Setting a colour or brightness implies the strip turns on, so you do not also
+need to add "state":"on" in that case. "dim" means lower brightness; "bright"
+or "full" means brightness 100.
+
+State words: on/off, turn on/off, kill, cut, shut, enable/disable.
 
 Examples:
-- "big lie on" -> {"action":"set_load","parameters":{"load":"big_lights","state":"on"}}
-- "ig light off" -> {"action":"set_load","parameters":{"load":"big_lights","state":"off"}}
-- "turn the leds on" -> {"action":"set_load","parameters":{"load":"leds","state":"on"}}
-- "kill all the lights" -> {"action":"set_load","parameters":{"load":"all","state":"off"}}
+- "turn the lights on" -> {"action":"set_rgb","parameters":{"state":"on"}}
+- "turn off the leds" -> {"action":"set_rgb","parameters":{"state":"off"}}
+- "make it red" -> {"action":"set_rgb","parameters":{"color":"red"}}
+- "set the strip to blue" -> {"action":"set_rgb","parameters":{"color":"blue"}}
+- "dim the lights to 20 percent" -> {"action":"set_rgb","parameters":{"brightness":20}}
+- "warm white at half brightness" -> {"action":"set_rgb","parameters":{"color":"warm white","brightness":50}}
 
 Response format:
 {
-    "action": "set_load",
-    "parameters": {
-        "load": string,  // "big_lights", "leds", or "all"
-        "state": string  // "on" or "off"
-    }
+    "action": "set_rgb",
+    "parameters": { ... only the keys the user asked for ... }
 }
 
-For commands that do not match a known load, respond with:
+For commands that are not about the light strip, respond with:
 {
     "action": "unknown",
     "parameters": {}
 }
 
 Remember: Return EXACTLY ONE JSON object with no additional text or markers."""
+
+
+class RgbMqttController:
+    """Publishes RGB-strip commands to the MQTT broker.
+
+    Holds a single persistent connection (paho's background loop with automatic
+    reconnect), so each voice command is just one tiny non-blocking publish — no
+    per-command connect/handshake. Credentials come from the environment
+    (MQTT_USER / MQTT_PASS) and never touch the config file.
+    """
+
+    def __init__(self, config, logger):
+        import paho.mqtt.client as mqtt  # lazy: only needed for RGB control
+
+        self.logger = logger
+        self.topic = config.mqtt.rgb_set_topic
+
+        # paho 2.x requires a callback API version; 1.x has no such argument.
+        try:
+            self.client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2, client_id="clank-controller"
+            )
+        except (AttributeError, TypeError):
+            self.client = mqtt.Client(client_id="clank-controller")
+
+        user = os.getenv("MQTT_USER", "clank")
+        password = os.getenv("MQTT_PASS", "")
+        if password:
+            self.client.username_pw_set(user, password)
+        else:
+            logger.warning(
+                "MQTT_PASS not set; connecting without credentials (the broker "
+                "will reject this if it requires auth)."
+            )
+
+        self.client.reconnect_delay_set(min_delay=1, max_delay=30)
+        # connect_async + loop_start never blocks startup: if the broker is down
+        # the client keeps retrying in the background and publishes succeed once
+        # it comes up.
+        self.client.connect_async(
+            config.mqtt.broker_host, config.mqtt.broker_port, keepalive=60
+        )
+        self.client.loop_start()
+        logger.info(
+            f"MQTT RGB controller -> {config.mqtt.broker_host}:"
+            f"{config.mqtt.broker_port} topic {self.topic!r}"
+        )
+
+    def publish(self, payload: dict):
+        """Publish one RGB command (qos 0, not retained — commands are momentary)."""
+        self.client.publish(self.topic, json.dumps(payload), qos=0, retain=False)
 
 
 class VoiceProcessor:
@@ -129,6 +181,15 @@ class VoiceProcessor:
             self.wake_word, "clank", "clink", "clunk", "klank", "clang",
             "clack", "crank", "blank", "plank", "flank",
         }
+
+        # RGB LED strip over MQTT. Constructed once so the connection is reused
+        # for every command. If paho-mqtt isn't installed the assistant still
+        # runs (RGB commands just warn) so non-MQTT testing keeps working.
+        try:
+            self.rgb = RgbMqttController(config, logger)
+        except Exception as e:
+            self.rgb = None
+            self.logger.warning(f"MQTT RGB controller unavailable: {e}")
 
     def _strip_wake_word(self, text):
         """Detect the wake word and return (heard, command_text).
@@ -238,6 +299,26 @@ class VoiceProcessor:
                             )
                 if last_err is not None:
                     self.logger.error(f"Error sending command to ESP32: {last_err}")
+
+            elif parsed_json["action"] == "set_rgb":
+                params = parsed_json["parameters"]
+                # Build the compact MQTT payload the firmware expects, mapping
+                # the validated colour name -> RGB and brightness% -> 0-255.
+                mqtt_payload = {}
+                if "state" in params:
+                    mqtt_payload["state"] = params["state"].upper()
+                if "color" in params:
+                    r, g, b = COLOR_RGB[params["color"]]
+                    mqtt_payload["r"], mqtt_payload["g"], mqtt_payload["b"] = r, g, b
+                if "brightness" in params:
+                    mqtt_payload["brightness"] = round(params["brightness"] * 255 / 100)
+
+                # Log the resolved command (never the raw speech).
+                self.logger.info(f"Command(rgb): {params}")
+                if self.rgb is None:
+                    self.logger.error("RGB command but MQTT controller is unavailable")
+                else:
+                    self.rgb.publish(mqtt_payload)
 
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
