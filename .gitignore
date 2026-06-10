@@ -26,8 +26,15 @@ ESP32LEDs/cert.h
 # ESP32 WiFi credentials + API key (committed template: secrets.h.example)
 ESP32LEDs/secrets.h
 
-# Model weights — large binaries, fetched by scripts/fetch_moonshine.sh
-models/
+# Model weights — large binaries, fetched by scripts/fetch_moonshine.sh.
+# Ignore the contents (so git can still descend) rather than the directory
+# itself, so the one small model we ship can be re-included below.
+models/*
+# ...except our own small, hash-pinned "hey clank" wake model, which ships in
+# the repo (re-include the directory first, then the file).
+!models/wakeword/
+models/wakeword/*
+!models/wakeword/hey_clank.onnx
 
 # Logs
 logs/
