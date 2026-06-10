@@ -22,6 +22,26 @@ class AudioConfig:
     # require_wake_word False to act on every utterance (less private).
     wake_word: str = "clank"
     require_wake_word: bool = True
+    # Wake detection engine:
+    #   "text"        — transcribe every utterance, then match the wake_word in
+    #                   the transcript (simple, but STT runs constantly).
+    #   "openwakeword"— a small acoustic model gates BEFORE transcription, so
+    #                   Moonshine stays idle until the wake word fires.
+    wake_engine: str = "text"
+    # openWakeWord settings (only used when wake_engine == "openwakeword").
+    # oww_model: a builtin name ("hey_jarvis", "alexa", "hey_mycroft",
+    # "hey_marvin") or a path to a custom-trained .onnx model.
+    oww_model: str = "hey_jarvis"
+    oww_threshold: float = 0.5
+    # Max seconds to wait for a command after the wake word fires.
+    command_timeout_s: float = 6.0
+    # Pre-roll: seconds of audio kept before the wake word fires and prepended
+    # to the captured command, so a fast command onset (e.g. "all") isn't
+    # clipped by wake-detection latency.
+    command_preroll_s: float = 0.5
+    # Debug: log the peak wake-word score once a second so you can see whether
+    # audio is reaching the model and how high it scores when you speak.
+    oww_debug: bool = False
 
 @dataclass
 class SecurityConfig:
@@ -37,6 +57,16 @@ class SecurityConfig:
     log_transcripts: bool = False
 
 @dataclass
+class MqttConfig:
+    # The broker runs on this PC (also the host hotspot gateway), so the
+    # Python side connects over loopback. The ESP32 reaches the same broker at
+    # the hotspot address 10.42.0.1. Credentials come from the environment
+    # (MQTT_USER / MQTT_PASS), never the config file.
+    broker_host: str = "127.0.0.1"
+    broker_port: int = 1883
+    rgb_set_topic: str = "clank/rgb/set"
+
+@dataclass
 class NetworkConfig:
     use_service_discovery: bool = True
     mdns_service_name: str = "_clank-led._tcp.local"
@@ -49,7 +79,7 @@ class LLMConfig:
     model: str = "qwen3:4b"
     temperature: float = 0.0
     max_tokens: int = 150
-    timeout: float = 30.0
+    timeout: float = 90.0
     # Force Ollama to emit a single valid JSON object (structured output).
     response_format: str = "json"
     # Disable reasoning models' "thinking" so the token budget produces the
@@ -78,6 +108,7 @@ class ClankConfig:
         self.config_path = config_path or self._find_config_file()
         self.audio = AudioConfig()
         self.security = SecurityConfig()
+        self.mqtt = MqttConfig()
         self.network = NetworkConfig()
         self.llm = LLMConfig()
         self.models = ModelConfig()
@@ -119,6 +150,8 @@ class ClankConfig:
                 self._update_dataclass(self.audio, config_data['audio'])
             if 'security' in config_data:
                 self._update_dataclass(self.security, config_data['security'])
+            if 'mqtt' in config_data:
+                self._update_dataclass(self.mqtt, config_data['mqtt'])
             if 'network' in config_data:
                 self._update_dataclass(self.network, config_data['network'])
             if 'llm' in config_data:

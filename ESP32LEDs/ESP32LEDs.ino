@@ -1,306 +1,213 @@
+// Clank RGB LED-strip controller — MQTT firmware.
+//
+// Drives a common-cathode RGB strip through three NPN transistors (GPIO -> base,
+// strip channel -> collector, emitter -> GND). Each colour channel is dimmed
+// with an 8-bit LEDC PWM signal, so wiring is ACTIVE-HIGH: duty 0 = off,
+// duty 255 = full brightness.
+//
+// Control is entirely over MQTT (no HTTP server on the device):
+//   subscribe  clank/rgb/set          <- JSON command (see below)
+//   publish    clank/rgb/state        -> JSON current state (retained)
+//   publish    clank/rgb/availability -> "online" / "offline" (retained, LWT)
+//
+// Command JSON (all fields optional):
+//   {"state":"ON"|"OFF", "r":0-255, "g":0-255, "b":0-255, "brightness":0-255}
+//   - sending any of r/g/b implies the strip turns ON (unless state is "OFF")
+//   - brightness is a master scale applied to all three channels
+//
+// Libraries (install once):
+//   arduino-cli lib install PubSubClient ArduinoJson
+
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 
-// HTTPS server from ESP-IDF, bundled with ESP32 Arduino core 3.x — no extra
-// library to install.
-#include <esp_https_server.h>
-
-// TLS certificate + private key, as PEM strings.
-// Generate before flashing:  python3 scripts/generate_esp32_cert.py --ip <device-ip>
-// cert.h contains the private key and must never be committed (see .gitignore).
-#include "cert.h"
-
-// WiFi credentials + API key. Copy secrets.h.example to secrets.h and fill in.
-// secrets.h is gitignored so credentials are never committed.
+// WiFi creds, broker address + credentials. Copy secrets.h.example to secrets.h
+// and fill in. secrets.h is gitignored so nothing sensitive is committed.
 #include "secrets.h"
 
 // baud 115200
 
-// WiFi credentials (from secrets.h)
-const char* ssid     = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+// ---- RGB channel -> GPIO mapping (NPN transistor bases) ----
+// Active-high: the strip is common-cathode and each channel is switched to GND
+// by an NPN, so a higher PWM duty = brighter.
+const int PIN_R = 13;
+const int PIN_G = 33;
+const int PIN_B = 14;
 
-// Static IP on the host hotspot subnet. Fixed up front so the TLS certificate
-// can pin this address before the device is ever flashed. gateway_IP is the
-// host AP (NetworkManager "shared" default is 10.42.0.1).
-IPAddress local_IP(10, 42, 0, 50);
-IPAddress gateway_IP(10, 42, 0, 1);
-IPAddress subnet_mask(255, 255, 255, 0);
+// LEDC PWM: 5 kHz is well above visible flicker and easy on the transistors;
+// 8-bit resolution gives a 0-255 duty that maps 1:1 to colour values.
+const int PWM_FREQ = 5000;
+const int PWM_RES  = 8;
 
-// Shared API key (from secrets.h) — must match ESP32_API_KEY on the Python side.
-// Leave empty ("") in secrets.h to disable authentication (not recommended).
-const char* API_KEY = CLANK_API_KEY;
+// mDNS hostname — device reachable at clank-rgb.local for debugging.
+const char* MDNS_HOSTNAME = "clank-rgb";
 
-// mDNS hostname — device will be reachable at clank-led.local
-const char* MDNS_HOSTNAME = "clank-led";
+// ---- MQTT topics ----
+const char* TOPIC_SET     = "clank/rgb/set";
+const char* TOPIC_STATE   = "clank/rgb/state";
+const char* TOPIC_AVAIL   = "clank/rgb/availability";
 
-// Relay channels — named loads mapped to GPIO pins. The Python side sends a
-// load name ("big_lights"/"leds"); the firmware owns the name->pin mapping.
-// Most Songle/SRD relay boards are ACTIVE-LOW: GPIO LOW energises the relay.
-// Set RELAY_ACTIVE_LOW to 0 if yours is active-high.
-#define RELAY_ACTIVE_LOW 1
+WiFiClient   net;
+PubSubClient mqtt(net);
 
-struct Load {
-  const char* name;
-  int         pin;
-};
+// ---- current strip state ----
+uint8_t curR = 255, curG = 255, curB = 255;  // colour (defaults to white)
+uint8_t brightness = 255;                      // master scale 0-255
+bool    isOn = false;                          // start OFF (nothing lit at boot)
 
-Load LOADS[] = {
-  { "big_lights", 26 },  // relay IN1 -> GPIO26
-  { "leds",        2 },  // GPIO2 = onboard LED on most ESP32 dev boards (no wiring needed to test)
-};
-const int NUM_LOADS = sizeof(LOADS) / sizeof(LOADS[0]);
+char clientId[32];
 
-// Drive a relay pin to the desired logical state, honouring active-low wiring.
-void setRelay(int pin, bool on) {
-#if RELAY_ACTIVE_LOW
-  digitalWrite(pin, on ? LOW : HIGH);
-#else
-  digitalWrite(pin, on ? HIGH : LOW);
-#endif
+// Scale an 8-bit channel by the master brightness (rounded).
+uint8_t scaled(uint8_t channel) {
+  return (uint16_t)channel * brightness / 255;
 }
 
-// Read back a pin's logical on/off state (digitalRead returns the output latch
-// for OUTPUT pins on ESP32), accounting for active-low wiring.
-bool loadIsOn(int pin) {
-#if RELAY_ACTIVE_LOW
-  return digitalRead(pin) == LOW;
-#else
-  return digitalRead(pin) == HIGH;
-#endif
+// Push the current logical state to the PWM outputs.
+void applyOutput() {
+  if (isOn) {
+    ledcWrite(PIN_R, scaled(curR));
+    ledcWrite(PIN_G, scaled(curG));
+    ledcWrite(PIN_B, scaled(curB));
+  } else {
+    ledcWrite(PIN_R, 0);
+    ledcWrite(PIN_G, 0);
+    ledcWrite(PIN_B, 0);
+  }
 }
 
-// Print the current state of every load to the serial monitor.
+// Print current state to the serial monitor (mirrors the old relay firmware).
 void printStatus() {
-  Serial.println(F("---- Load status ----"));
-  for (int i = 0; i < NUM_LOADS; i++) {
-    Serial.printf("  %-12s (GPIO%2d): %s\n",
-                  LOADS[i].name, LOADS[i].pin, loadIsOn(LOADS[i].pin) ? "ON" : "OFF");
-  }
-  Serial.println(F("---------------------"));
+  Serial.println(F("---- RGB status ----"));
+  Serial.printf("  power     : %s\n", isOn ? "ON" : "OFF");
+  Serial.printf("  colour    : R=%-3u G=%-3u B=%-3u\n", curR, curG, curB);
+  Serial.printf("  brightness: %u\n", brightness);
+  Serial.println(F("--------------------"));
 }
 
-httpd_handle_t server = NULL;
-
-// ---------- rate limiting ----------
-// Sliding-window limiter: at most RATE_LIMIT_MAX requests per
-// RATE_LIMIT_WINDOW_MS. Applied to /led-control before authentication so
-// it also throttles API-key brute-force attempts.
-const int           RATE_LIMIT_MAX       = 60;       // requests per window
-const unsigned long RATE_LIMIT_WINDOW_MS = 60000UL;  // 60 seconds
-
-unsigned long requestTimes[RATE_LIMIT_MAX];
-int           requestCount = 0;
-
-// Returns true if a new request is allowed, recording it if so.
-// Unsigned subtraction makes this correct across millis() overflow (~49 days).
-bool rateLimitAllow() {
-  unsigned long now = millis();
-
-  int kept = 0;
-  for (int i = 0; i < requestCount; i++) {
-    if (now - requestTimes[i] < RATE_LIMIT_WINDOW_MS) {
-      requestTimes[kept++] = requestTimes[i];
-    }
-  }
-  requestCount = kept;
-
-  if (requestCount >= RATE_LIMIT_MAX) return false;
-
-  requestTimes[requestCount++] = now;
-  return true;
+// Publish the current state as retained JSON so a late subscriber (or Clank
+// restart) immediately learns the strip's colour without prompting it.
+void publishState() {
+  JsonDocument doc;
+  doc["state"]      = isOn ? "ON" : "OFF";
+  doc["r"]          = curR;
+  doc["g"]          = curG;
+  doc["b"]          = curB;
+  doc["brightness"] = brightness;
+  char buf[96];
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  mqtt.publish(TOPIC_STATE, (const uint8_t*)buf, n, true);  // retained
 }
 
-// ---------- helpers ----------
-
-// Returns true if the request carries a valid API key.
-// Authentication is skipped when API_KEY is empty (dev/testing only).
-// Uses a constant-time comparison to avoid leaking the key via timing.
-bool isAuthenticated(httpd_req_t* req) {
-  if (strlen(API_KEY) == 0) return true;
-
-  size_t hlen = httpd_req_get_hdr_value_len(req, "X-API-Key");
-  if (hlen == 0) return false;
-
-  char provided[160];
-  if (hlen >= sizeof(provided)) return false;
-  if (httpd_req_get_hdr_value_str(req, "X-API-Key", provided, sizeof(provided)) != ESP_OK) {
-    return false;
-  }
-
-  size_t keyLen  = strlen(API_KEY);
-  size_t provLen = strlen(provided);
-
-  // Constant-time compare: always scan the full key length and fold any
-  // length mismatch into the result so timing does not reveal the key.
-  unsigned char diff = (unsigned char)(provLen ^ keyLen);
-  for (size_t i = 0; i < keyLen; i++) {
-    char p = (i < provLen) ? provided[i] : 0;
-    diff |= (unsigned char)(p ^ API_KEY[i]);
-  }
-  return diff == 0;
+// Clamp a JSON number to 0-255.
+uint8_t clamp8(int v) {
+  if (v < 0)   return 0;
+  if (v > 255) return 255;
+  return (uint8_t)v;
 }
 
-esp_err_t sendText(httpd_req_t* req, const char* status, const char* body) {
-  httpd_resp_set_status(req, status);
-  httpd_resp_set_type(req, "text/plain");
-  return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-}
+// ---- MQTT message handler ----
+void onMessage(char* topic, byte* payload, unsigned int length) {
+  if (length == 0 || length > 200) return;  // commands are tiny
 
-// ---------- handlers ----------
+  char buf[201];
+  memcpy(buf, payload, length);
+  buf[length] = '\0';
+  Serial.printf("RX %s: %s\n", topic, buf);
 
-esp_err_t handleHealth(httpd_req_t* req) {
-  // Public endpoint — no auth required.
-  // Clank discovery service checks GET /health for {"service":"clank-led"}.
-  httpd_resp_set_type(req, "application/json");
-  return httpd_resp_send(req, "{\"service\":\"clank-led\",\"status\":\"ok\"}",
-                         HTTPD_RESP_USE_STRLEN);
-}
-
-esp_err_t handleLedControl(httpd_req_t* req) {
-  if (!rateLimitAllow()) {
-    return sendText(req, "429 Too Many Requests", "Rate limit exceeded");
-  }
-
-  if (!isAuthenticated(req)) {
-    return sendText(req, "401 Unauthorized", "Authentication failed");
-  }
-
-  // Read the request body (bounded — the command JSON is tiny).
-  int total = req->content_len;
-  if (total <= 0 || total > 255) {
-    return sendText(req, "400 Bad Request", "No data received");
-  }
-
-  char buf[256];
-  int received = 0;
-  while (received < total) {
-    int r = httpd_req_recv(req, buf + received, total - received);
-    if (r <= 0) {
-      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
-      return ESP_FAIL;
-    }
-    received += r;
-  }
-  buf[received] = '\0';
-
-  // Echo the raw command to the serial monitor for debugging.
-  Serial.printf("RX /led-control: %s\n", buf);
-
-  StaticJsonDocument<200> doc;
-  DeserializationError error = deserializeJson(doc, buf, received);
-  if (error) {
+  JsonDocument doc;
+  if (deserializeJson(doc, buf, length)) {
     Serial.println(F("  -> rejected: invalid JSON"));
-    return sendText(req, "400 Bad Request", "Invalid JSON");
-  }
-
-  if (doc["action"] != "set_load") {
-    Serial.println(F("  -> rejected: unknown action"));
-    return sendText(req, "400 Bad Request", "Unknown action");
-  }
-
-  const char* load  = doc["parameters"]["load"]  | "";
-  const char* state = doc["parameters"]["state"] | "";
-  bool isOn = (strcmp(state, "on") == 0);
-
-  // "all" toggles every known load; otherwise match a single named load.
-  if (strcmp(load, "all") == 0) {
-    for (int i = 0; i < NUM_LOADS; i++) setRelay(LOADS[i].pin, isOn);
-    Serial.printf("  -> set all = %s\n", isOn ? "ON" : "OFF");
-    printStatus();
-    return sendText(req, "200 OK", "Command processed");
-  }
-
-  for (int i = 0; i < NUM_LOADS; i++) {
-    if (strcmp(load, LOADS[i].name) == 0) {
-      setRelay(LOADS[i].pin, isOn);
-      Serial.printf("  -> set %s = %s\n", LOADS[i].name, isOn ? "ON" : "OFF");
-      printStatus();
-      return sendText(req, "200 OK", "Command processed");
-    }
-  }
-
-  Serial.printf("  -> rejected: unknown load '%s'\n", load);
-  return sendText(req, "400 Bad Request", "Unknown load");
-}
-
-// ---------- setup / loop ----------
-
-void startHttpsServer() {
-  httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
-  conf.servercert     = (const uint8_t*)clank_cert_pem;
-  conf.servercert_len = strlen(clank_cert_pem) + 1;   // mbedtls PEM needs the NUL
-  conf.prvtkey_pem    = (const uint8_t*)clank_key_pem;
-  conf.prvtkey_len    = strlen(clank_key_pem) + 1;
-  conf.port_secure    = 443;
-  conf.httpd.stack_size = 10240;  // TLS handshake needs a larger task stack
-
-  esp_err_t ret = httpd_ssl_start(&server, &conf);
-  if (ret != ESP_OK) {
-    Serial.printf("HTTPS server failed to start (err 0x%x)\n", ret);
     return;
   }
 
-  httpd_uri_t led_uri = {
-    .uri = "/led-control", .method = HTTP_POST, .handler = handleLedControl, .user_ctx = NULL
-  };
-  httpd_register_uri_handler(server, &led_uri);
+  bool colourGiven = doc["r"].is<int>() || doc["g"].is<int>() || doc["b"].is<int>();
+  bool brightGiven = doc["brightness"].is<int>();
+  if (doc["r"].is<int>()) curR = clamp8(doc["r"].as<int>());
+  if (doc["g"].is<int>()) curG = clamp8(doc["g"].as<int>());
+  if (doc["b"].is<int>()) curB = clamp8(doc["b"].as<int>());
+  if (brightGiven) brightness = clamp8(doc["brightness"].as<int>());
 
-  httpd_uri_t health_uri = {
-    .uri = "/health", .method = HTTP_GET, .handler = handleHealth, .user_ctx = NULL
-  };
-  httpd_register_uri_handler(server, &health_uri);
+  // Explicit state wins; otherwise setting a colour or brightness implies ON.
+  if (doc["state"].is<const char*>()) {
+    const char* s = doc["state"];
+    isOn = (strcasecmp(s, "on") == 0);
+  } else if (colourGiven || brightGiven) {
+    isOn = true;
+  }
 
-  Serial.println("HTTPS server started on port 443");
+  applyOutput();
+  printStatus();
+  publishState();
+}
+
+// ---- connectivity ----
+void connectWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.println("WiFi connected, IP: " + WiFi.localIP().toString());
+
+  // Disable modem-sleep so incoming MQTT messages aren't delayed by the radio
+  // powering down between beacons; reconnect automatically after AP drops.
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    Serial.println("mDNS started: " + String(MDNS_HOSTNAME) + ".local");
+  }
+}
+
+// (Re)connect to the broker. Registers a Last-Will so the broker marks the
+// device "offline" if it drops without a clean disconnect.
+void connectMqtt() {
+  while (!mqtt.connected()) {
+    Serial.print("Connecting to MQTT broker " MQTT_BROKER " ... ");
+    bool ok = mqtt.connect(
+        clientId, MQTT_USER, MQTT_PASS,
+        TOPIC_AVAIL, 0, true, "offline");  // LWT: retained "offline"
+    if (ok) {
+      Serial.println("connected");
+      mqtt.publish(TOPIC_AVAIL, "online", true);  // retained
+      mqtt.subscribe(TOPIC_SET);
+      publishState();
+    } else {
+      Serial.printf("failed (rc=%d), retrying in 2s\n", mqtt.state());
+      delay(2000);
+    }
+  }
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // Initialise all relay pins OFF before driving them, so nothing switches on
-  // during boot/reset (important when mains loads are attached).
-  for (int i = 0; i < NUM_LOADS; i++) {
-    pinMode(LOADS[i].pin, OUTPUT);
-    setRelay(LOADS[i].pin, false);
-  }
-  Serial.println(F("\nBoot: all loads initialised OFF"));
+  // Attach PWM to each channel and start with everything off so the strip is
+  // dark through boot/reset.
+  ledcAttach(PIN_R, PWM_FREQ, PWM_RES);
+  ledcAttach(PIN_G, PWM_FREQ, PWM_RES);
+  ledcAttach(PIN_B, PWM_FREQ, PWM_RES);
+  applyOutput();
+  Serial.println(F("\nBoot: RGB outputs initialised OFF"));
   printStatus();
 
-  // Connect to WiFi using the fixed static IP (pinned by the certificate).
-  if (!WiFi.config(local_IP, gateway_IP, subnet_mask, gateway_IP)) {
-    Serial.println("Static IP configuration failed");
-  }
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nConnected to WiFi");
-  Serial.println("IP address: " + WiFi.localIP().toString());
+  // Unique client id from the MAC so two devices never collide on the broker.
+  uint64_t mac = ESP.getEfuseMac();
+  snprintf(clientId, sizeof(clientId), "clank-rgb-%04X", (uint16_t)(mac >> 32));
 
-  // Disable WiFi modem-sleep. By default the ESP32 powers the radio down
-  // between beacons, which adds hundreds of ms to seconds of latency to
-  // incoming connections — the usual cause of "works but regularly times out".
-  WiFi.setSleep(false);
-  // Reconnect automatically if the AP drops us, so a brief outage doesn't
-  // leave the device offline until the next manual reboot.
-  WiFi.setAutoReconnect(true);
-
-  // Start mDNS — advertises _clank-led._tcp on the TLS port. The "secure"
-  // TXT record tells Clank's discovery to use https.
-  if (MDNS.begin(MDNS_HOSTNAME)) {
-    MDNS.addService("clank-led", "tcp", 443);
-    MDNS.addServiceTxt("clank-led", "tcp", "secure", "true");
-    Serial.println("mDNS started: " + String(MDNS_HOSTNAME) + ".local");
-  } else {
-    Serial.println("mDNS failed to start");
-  }
-
-  startHttpsServer();
+  connectWifi();
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setCallback(onMessage);
+  connectMqtt();
 }
 
 void loop() {
-  // The HTTPS server runs in its own FreeRTOS task; nothing to do here.
-  delay(1000);
+  if (WiFi.status() != WL_CONNECTED) connectWifi();
+  if (!mqtt.connected()) connectMqtt();
+  mqtt.loop();
 }
