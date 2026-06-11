@@ -41,6 +41,16 @@ COLOR_RGB = {
 # changes together over time. Spatial effects (wipe, chase, scanner, comet,
 # meteor, fireworks, etc.) are excluded because they need addressable pixels to
 # be visible — on a single analog pixel they collapse to solid or a plain blink.
+# Spoken effect name -> WLED FX id. Restricted to the effects WLED actually
+# offers for our single-pixel (len:1) analog RGB segment — i.e. the temporal
+# effects that animate one colour zone. Spatial effects (Rainbow, Saw, Sine,
+# Wipe, Chase, ...) are hidden by WLED on a 1-pixel segment because they need
+# length to render, so they're deliberately NOT mapped here: sending them would
+# silently do nothing. Audio-reactive effects (DJ Light, Freqwave, Waterfall,
+# ...) are also omitted — the AudioReactive usermod is disabled and no mic is
+# wired, so they'd never animate. IDs verified live against the device's
+# /json/eff. If you ever wire an I2S mic + enable AudioReactive, the reactive
+# effects can be added back.
 WLED_EFFECTS = {
     # steady
     "solid":          0,
@@ -53,16 +63,14 @@ WLED_EFFECTS = {
     "pulse":          2,
     "breathing":      2,
     "fade":           12,
-    "saw":            16,
-    "sawtooth":       16,
-    "sine":           108,
     "heartbeat":      100,
     "heart beat":     100,
-    # colour cycling
+    # colour cycling. WLED's spatial "Rainbow" (9) is dead on one pixel, so the
+    # common spoken word "rainbow" maps to Colorloop (8), which cycles the hue
+    # of the single zone — exactly what people mean by "rainbow" here.
     "random":         5,
     "random colors":  5,
     "random colours": 5,
-    "dynamic":        7,
     "colorloop":      8,
     "colourloop":     8,
     "color loop":     8,
@@ -70,7 +78,7 @@ WLED_EFFECTS = {
     "cycle":          8,
     "cycle colors":   8,
     "cycle colours":  8,
-    "rainbow":        9,
+    "rainbow":        8,
     # flashing / strobe family
     "strobe":         23,
     "flash":          23,
@@ -80,7 +88,6 @@ WLED_EFFECTS = {
     "mega strobe":    25,
     "blink rainbow":  26,
     "rainbow blink":  26,
-    "lightning":      57,
     # flicker / fire
     "candle":         88,
     "flicker":        88,
@@ -89,6 +96,10 @@ WLED_EFFECTS = {
     "fire":           45,
     "fire flicker":   45,
     "flame":          45,
+    # misc
+    "tv":             116,
+    "tv simulator":   116,
+    "television":     116,
 }
 
 class LEDColor(Enum):

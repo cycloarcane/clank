@@ -40,12 +40,12 @@ parameters the user actually asked for:
 - "color": one of red, green, blue, white, warm white, yellow, orange, amber,
   purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold
 - "brightness": integer 0-100 (a percentage)
-- "effect": one of solid, blink, breathe, fade, saw, sine, heartbeat, random,
-  dynamic, colorloop, rainbow, strobe, strobe rainbow, strobe mega, blink
-  rainbow, lightning, candle, fire. Use "solid" for a plain steady colour or
-  "stop the effect". Map intent: "pulse"/"breathing" -> breathe, "cycle
-  colours" -> colorloop, "flicker"/"candle light" -> candle, "flash" -> strobe,
-  "flames" -> fire, "random colours" -> random, "thunder" -> lightning.
+- "effect": one of solid, blink, breathe, fade, heartbeat, random, colorloop,
+  rainbow, strobe, strobe rainbow, strobe mega, blink rainbow, candle, fire, tv.
+  Use "solid" for a plain steady colour or "stop the effect". Map intent:
+  "pulse"/"breathing" -> breathe, "cycle colours" -> colorloop, "rainbow" ->
+  rainbow, "flicker"/"candle light" -> candle, "flash" -> strobe, "flames" ->
+  fire, "random colours" -> random, "tv"/"fake tv" -> tv.
 - "speed": integer 0-100 — how FAST the current effect animates (0 = slowest,
   100 = fastest). Use for "faster/quicker/speed up" -> a high value like 85;
   "slower/calmer" -> a low value like 20.
