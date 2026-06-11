@@ -6,13 +6,15 @@ turns the three of them into a tiny three-voice drum machine. There's no pitch,
 only rhythm. Press Ctrl+C to stop; the plugs are switched off and left quiet.
 
 Connects to the same MQTT broker Clank uses; credentials come from the
-environment (MQTT_USER / MQTT_PASS), exactly like the rest of Clank. Run it
-from a shell that has sourced .env, e.g.:
+environment (MQTT_USER / MQTT_PASS) — and the script auto-loads the repo's .env
+if those aren't already set, so it works the same in fish, bash, or anywhere
+with no `source` dance:
 
-    set -a; source .env; set +a
     python3 scripts/plug_jukebox.py            # default groove at 120 BPM
     python3 scripts/plug_jukebox.py --bpm 150 --pattern backbeat
     python3 scripts/plug_jukebox.py --plugs plug1,plug2 --bpm 90
+
+(Already-set environment variables win over .env, so you can still override.)
 
 NOTE ON WEAR: a relay is a mechanical part with a finite number of operations
 (typically tens of thousands+). A few minutes of this is harmless fun; don't
@@ -58,6 +60,25 @@ MIN_STEP_MS = 80          # relays follow cleanly down to ~80 ms; don't go faste
 running = True
 
 
+def _load_dotenv():
+    """Load KEY=VALUE pairs from the repo's .env into os.environ (stripping
+    surrounding quotes), without overriding anything already set. Lets the
+    script run in any shell without sourcing .env first."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                os.environ.setdefault(key, val)
+    except FileNotFoundError:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -69,6 +90,8 @@ def main():
                     help="comma-separated plug base topics in voice order")
     ap.add_argument("--channel", default="1", help="relay channel index (OpenBeken)")
     args = ap.parse_args()
+
+    _load_dotenv()
 
     import paho.mqtt.client as mqtt
 
