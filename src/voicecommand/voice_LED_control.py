@@ -40,16 +40,27 @@ parameters the user actually asked for:
 - "color": one of red, green, blue, white, warm white, yellow, orange, amber,
   purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold
 - "brightness": integer 0-100 (a percentage)
-- "effect": one of solid, blink, breathe, fade, colorloop, rainbow, strobe,
-  candle. Use "solid" when the user wants a plain steady colour / "stop the
-  effect". Map intent: "pulse"/"breathing" -> breathe, "cycle colours" ->
-  colorloop, "flicker"/"candle light" -> candle, "flash" -> strobe.
+- "effect": one of solid, blink, breathe, fade, saw, sine, heartbeat, random,
+  dynamic, colorloop, rainbow, strobe, strobe rainbow, strobe mega, blink
+  rainbow, lightning, candle, fire. Use "solid" for a plain steady colour or
+  "stop the effect". Map intent: "pulse"/"breathing" -> breathe, "cycle
+  colours" -> colorloop, "flicker"/"candle light" -> candle, "flash" -> strobe,
+  "flames" -> fire, "random colours" -> random, "thunder" -> lightning.
+- "speed": integer 0-100 — how FAST the current effect animates (0 = slowest,
+  100 = fastest). Use for "faster/quicker/speed up" -> a high value like 85;
+  "slower/calmer" -> a low value like 20.
+- "intensity": integer 0-100 — the effect's strength/amount (effect-specific).
+  Use for "more/less intense", "stronger/subtler".
 
 Phrases for the strip: "leds", "led", "led strip", "strip", "the lights",
 "the light", "mood lights", and mishearings such as "let", "leads", "ledd".
-Setting a colour, brightness, or effect implies the strip turns on, so you do
-not also need to add "state":"on" in that case. "dim" means lower brightness;
-"bright" or "full" means brightness 100.
+Setting a colour, brightness, effect, speed, or intensity implies the strip
+turns on, so you do not also need to add "state":"on" in that case. "dim" means
+lower brightness; "bright" or "full" means brightness 100.
+
+speed and intensity adjust whatever effect is already running, so a command
+like "make the strobe quicker" needs ONLY the speed (do not resend the effect
+unless the user is also changing it).
 
 State words: on/off, turn on/off, kill, cut, shut, enable/disable.
 
@@ -63,6 +74,11 @@ Examples:
 - "make the lights breathe" -> {"action":"set_rgb","parameters":{"effect":"breathe"}}
 - "cycle through colours" -> {"action":"set_rgb","parameters":{"effect":"colorloop"}}
 - "candle mode in orange" -> {"action":"set_rgb","parameters":{"color":"orange","effect":"candle"}}
+- "strobe the lights" -> {"action":"set_rgb","parameters":{"effect":"strobe"}}
+- "make the strobe quicker" -> {"action":"set_rgb","parameters":{"speed":85}}
+- "slow it down" -> {"action":"set_rgb","parameters":{"speed":20}}
+- "make the effect more intense" -> {"action":"set_rgb","parameters":{"intensity":85}}
+- "fast rainbow" -> {"action":"set_rgb","parameters":{"effect":"rainbow","speed":85}}
 - "stop the effect" -> {"action":"set_rgb","parameters":{"effect":"solid"}}
 
 Response format:
@@ -322,6 +338,13 @@ class VoiceProcessor:
                     seg["col"] = [list(COLOR_RGB[params["color"]])]
                 if "effect" in params:
                     seg["fx"] = WLED_EFFECTS[params["effect"]]
+                # Effect speed (sx) and intensity (ix) are 0-255 in WLED; map
+                # from our 0-100 percentages. These tune whatever effect is
+                # active, so "make the strobe quicker" is just a high speed.
+                if "speed" in params:
+                    seg["sx"] = round(params["speed"] * 255 / 100)
+                if "intensity" in params:
+                    seg["ix"] = round(params["intensity"] * 255 / 100)
                 if seg:
                     wled["seg"] = [seg]
                 if "brightness" in params:

@@ -311,13 +311,18 @@ Say the wake word **"clank"**, then a command. Clank controls one RGB strip — 
 | "clank, make the lights breathe" | Breathe effect |
 | "clank, cycle through colours" | Colorloop effect |
 | "clank, candle mode in orange" | Candle flicker, orange |
+| "clank, strobe the lights" | Strobe effect |
+| "clank, make the strobe quicker" | Speed up the running effect |
+| "clank, make the effect more intense" | Raise effect intensity |
 | "clank, stop the effect" | Back to solid colour |
 
-Setting a colour, brightness, or effect implies the strip turns on. Anything not about the light strip is discarded.
+Setting a colour, brightness, effect, speed, or intensity implies the strip turns on. Anything not about the light strip is discarded.
 
 **Recognised colours:** red, green, blue, white, warm white, yellow, orange, amber, purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold. (Defined in `src/voicecommand/validation.py` → `COLOR_RGB`.)
 
-**Recognised effects:** solid, blink, breathe, fade, colorloop, rainbow, strobe, candle. These are limited to effects that animate the *whole* strip over time — spatial effects (wipe, chase, sparkle) need addressable pixels and aren't meaningful on an analogue strip. (Mapped to WLED effect IDs in `validation.py` → `WLED_EFFECTS`.)
+**Recognised effects:** solid, blink, breathe, fade, saw, sine, heartbeat, random, dynamic, colorloop, rainbow, strobe, strobe rainbow, strobe mega, blink rainbow, lightning, candle, fire (plus spoken synonyms). These are limited to effects that animate the *whole* strip over time — spatial effects (wipe, chase, sparkle, comet…) need addressable pixels and aren't meaningful on an analogue strip, so they're deliberately excluded. (Mapped to WLED effect IDs in `validation.py` → `WLED_EFFECTS`.)
+
+**Effect speed & intensity:** say "faster"/"quicker"/"slower" to change how fast the active effect animates, or "more/less intense" for its strength — e.g. *"make the strobe quicker"*. These map to WLED's per-segment `sx`/`ix` and adjust whatever effect is already running without restarting it.
 
 ### MQTT payload format
 
