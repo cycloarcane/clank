@@ -30,16 +30,33 @@ devices:
     aliases: [leds, led, led strip, the lights, the light, mood lights, lights]
     persist_preset: 1
 
-  # ---------------------------------------------------------------------------
-  # Example on/off smart plug running OpenBeken (or Tasmota). Uncomment and edit
-  # once you've flashed a plug and pointed its MQTT broker at 10.42.0.1.
-  # `topic` is the plug's Tasmota-style command topic; OpenBeken answers
-  # cmnd/<name>/POWER with ON/OFF. Set/confirm the base name in the plug's web
-  # UI (Config -> MQTT). Then "turn off the desk lamp" just works.
+  # OpenBeken (BK7231N) smart plugs. Each plug's MQTT base topic (its "client"
+  # in the plug's Config -> MQTT) is plug1/plug2/plug3; the single relay is
+  # channel 1, so OpenBeken listens on "<base>/1/set" with payload 1 (on) / 0
+  # (off) and reports state on "<base>/1/get". All three are connected to the
+  # broker at 10.42.0.1.
   #
-  # - name: desk lamp
-  #   type: switch
-  #   topic: cmnd/desk_lamp/POWER
-  #   aliases: [desk light, lamp, desk]
-  #   on_payload: "ON"
-  #   off_payload: "OFF"
+  # The names below are interim — rename each to what it actually controls
+  # (e.g. "desk lamp", "fan") and add natural aliases, and voice commands like
+  # "turn off the desk lamp" will route to it. To find which physical plug is
+  # which: mosquitto_pub -t 'plug1/1/set' -m 1  (then 2, then 3) and watch.
+  - name: plug one
+    type: switch
+    topic: plug1/1/set
+    aliases: [plug 1, first plug, plug a]
+    on_payload: "1"
+    off_payload: "0"
+
+  - name: plug two
+    type: switch
+    topic: plug2/1/set
+    aliases: [plug 2, second plug, plug b]
+    on_payload: "1"
+    off_payload: "0"
+
+  - name: plug three
+    type: switch
+    topic: plug3/1/set
+    aliases: [plug 3, third plug, plug c]
+    on_payload: "1"
+    off_payload: "0"
