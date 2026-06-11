@@ -42,13 +42,14 @@ security:
   # only resolved commands (load -> state) are recorded. Set true to debug.
   log_transcripts: false
   
-# MQTT Settings — RGB LED strip control (ESP32 firmware subscribes to rgb_set_topic).
-# The broker (mosquitto) runs on this PC; the ESP32 connects to it at the
-# hotspot gateway 10.42.0.1. Credentials come from MQTT_USER / MQTT_PASS in .env.
+# MQTT Settings — RGB LED strip control. The ESP32 runs WLED and subscribes to
+# its JSON API topic (<device>/api); Clank publishes WLED state objects there.
+# The broker (mosquitto) runs on this PC; WLED connects to it at the hotspot
+# gateway 10.42.0.1. Credentials come from MQTT_USER / MQTT_PASS in .env.
 mqtt:
   broker_host: "127.0.0.1"
   broker_port: 1883
-  rgb_set_topic: "clank/rgb/set"
+  rgb_set_topic: "wled/clank/api"
 
 # Network Settings
 network:

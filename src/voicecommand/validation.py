@@ -35,6 +35,62 @@ COLOR_RGB = {
     "gold":      (255, 180,   0),
 }
 
+# Spoken effect name -> WLED effect (FX) ID. IDs are WLED's own effect indices
+# (from the device's /json/eff list). Limited to time-based effects that render
+# meaningfully on an analog/PWM strip (one virtual pixel): the whole strip
+# changes together over time. Spatial effects (wipe, chase, scanner, comet,
+# meteor, fireworks, etc.) are excluded because they need addressable pixels to
+# be visible — on a single analog pixel they collapse to solid or a plain blink.
+WLED_EFFECTS = {
+    # steady
+    "solid":          0,
+    "none":           0,
+    "steady":         0,
+    "off effect":     0,
+    # simple on/off + brightness modulation
+    "blink":          1,
+    "breathe":        2,
+    "pulse":          2,
+    "breathing":      2,
+    "fade":           12,
+    "saw":            16,
+    "sawtooth":       16,
+    "sine":           108,
+    "heartbeat":      100,
+    "heart beat":     100,
+    # colour cycling
+    "random":         5,
+    "random colors":  5,
+    "random colours": 5,
+    "dynamic":        7,
+    "colorloop":      8,
+    "colourloop":     8,
+    "color loop":     8,
+    "colour loop":    8,
+    "cycle":          8,
+    "cycle colors":   8,
+    "cycle colours":  8,
+    "rainbow":        9,
+    # flashing / strobe family
+    "strobe":         23,
+    "flash":          23,
+    "strobe rainbow": 24,
+    "rainbow strobe": 24,
+    "strobe mega":    25,
+    "mega strobe":    25,
+    "blink rainbow":  26,
+    "rainbow blink":  26,
+    "lightning":      57,
+    # flicker / fire
+    "candle":         88,
+    "flicker":        88,
+    "candlelight":    88,
+    "candle light":   88,
+    "fire":           45,
+    "fire flicker":   45,
+    "flame":          45,
+}
+
 class LEDColor(Enum):
     """Valid LED colors."""
     RED = "red"
@@ -229,9 +285,34 @@ class CommandValidator:
                 raise ValidationError("brightness must be between 0 and 100")
             validated["brightness"] = brightness
 
+        effect = params.get("effect")
+        if effect is not None:
+            if not isinstance(effect, str):
+                raise ValidationError("effect must be a string")
+            effect = effect.lower().strip()
+            if effect not in WLED_EFFECTS:
+                raise ValidationError(
+                    f"Invalid effect: {effect}. Must be one of {sorted(WLED_EFFECTS)}"
+                )
+            validated["effect"] = effect
+
+        # speed and intensity are 0-100 percentages controlling the active
+        # effect's animation (e.g. how fast a strobe flashes). They apply to
+        # whatever effect is running, so they're valid on their own.
+        for key in ("speed", "intensity"):
+            value = params.get(key)
+            if value is not None:
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise ValidationError(f"{key} must be a number")
+                value = int(value)
+                if value < 0 or value > 100:
+                    raise ValidationError(f"{key} must be between 0 and 100")
+                validated[key] = value
+
         if not validated:
             raise ValidationError(
-                "set_rgb requires at least one of color, state, or brightness"
+                "set_rgb requires at least one of color, state, brightness, "
+                "effect, speed, or intensity"
             )
         return {"action": "set_rgb", "parameters": validated}
 

@@ -1,6 +1,6 @@
-# Clank – Voice-controlled LED assistant
+# Clank – Voice-controlled RGB LED assistant
 
-Clank listens for spoken commands, transcribes them locally with the **Moonshine** speech-to-text model, parses the intent with a local **Ollama** LLM, and sends LED control commands to an **ESP32** microcontroller over your LAN.
+Clank listens for spoken commands, transcribes them locally with the **Moonshine** speech-to-text model, parses the intent with a local **Ollama** LLM, and drives an **RGB LED strip** on an **ESP32** by publishing to a local **MQTT** broker.
 
 Everything runs on your own hardware — no cloud APIs, no external data sent anywhere.
 
@@ -14,7 +14,7 @@ Clank is a hobby project provided **as-is, with no warranty** of any kind. You r
 
 - **Always-on microphone.** To detect its wake word, Clank continuously captures and transcribes audio from your microphone. Audio and transcripts are processed **locally, in memory, and discarded** — by default nothing is sent to the cloud and raw transcripts are not written to disk (only resolved commands are logged; see `security.log_transcripts`). Even so, you are running a device that is always listening.
 - **Other people's privacy.** Recording or transcribing people without their knowledge or consent may be illegal where you live (one-/two-party consent laws vary by jurisdiction). If others share the space, inform them. Compliance is **your responsibility**.
-- **Mains electricity is dangerous.** Switching 230/240 V (or 120 V) loads with relays or modified plugs can cause **electric shock, fire, or death** if done incorrectly. Use only properly rated, fused, and enclosed hardware — or commercial smart plugs — and consult a qualified electrician for any fixed wiring. The authors accept **no liability** for damage, injury, or loss resulting from use of this project.
+- **Mains electricity is dangerous.** This project now drives a low-voltage (5/12 V) RGB LED strip. If you adapt it to switch 230/240 V (or 120 V) loads, doing so incorrectly can cause **electric shock, fire, or death**. Use only properly rated, fused, and enclosed hardware — or commercial smart plugs — and consult a qualified electrician for any fixed wiring. The authors accept **no liability** for damage, injury, or loss resulting from use of this project.
 - **Not a safety device.** Do not use Clank to control anything where failure, a misheard command, or downtime could be hazardous (medical equipment, heating, security, etc.).
 
 By using Clank you accept these terms.
@@ -29,17 +29,17 @@ By using Clank you accept these terms.
 4. [Step 1 — Clone and install Python dependencies](#step-1--clone-and-install-python-dependencies)
 5. [Step 2 — Install and configure Ollama](#step-2--install-and-configure-ollama)
 6. [Step 3 — Fetch the Moonshine models](#step-3--fetch-the-moonshine-models)
-7. [Step 4 — Flash the ESP32 firmware](#step-4--flash-the-esp32-firmware)
-8. [Step 5 — Generate an API key](#step-5--generate-an-api-key)
-9. [Step 6 — Run Clank](#step-6--run-clank)
-10. [Voice commands](#voice-commands)
-11. [Configuration reference](#configuration-reference)
-12. [Device management](#device-management)
-13. [Logs and monitoring](#logs-and-monitoring)
-14. [Security features](#security-features)
-15. [Model provenance and supply-chain hardening](#model-provenance-and-supply-chain-hardening)
-16. [Auditing the model with Netron](#auditing-the-model-with-netron)
-17. [Re-auditing and updating models](#re-auditing-and-updating-models)
+7. [Step 4 — Wire the RGB strip](#step-4--wire-the-rgb-strip)
+8. [Step 5 — Set up the MQTT broker](#step-5--set-up-the-mqtt-broker)
+9. [Step 6 — Flash and configure WLED](#step-6--flash-and-configure-wled)
+10. [Step 7 — Run Clank](#step-7--run-clank)
+11. [Voice commands](#voice-commands)
+12. [Wake word](#wake-word)
+13. [Configuration reference](#configuration-reference)
+14. [Logs and monitoring](#logs-and-monitoring)
+15. [Security features](#security-features)
+16. [Model provenance and supply-chain hardening](#model-provenance-and-supply-chain-hardening)
+17. [Auditing the model with Netron](#auditing-the-model-with-netron)
 18. [Troubleshooting](#troubleshooting)
 19. [Repository layout](#repository-layout)
 20. [License](#license)
@@ -49,21 +49,46 @@ By using Clank you accept these terms.
 ## How it works
 
 ```
-Microphone ──► Silero VAD ──► Moonshine STT ──► Ollama LLM ──► ESP32 /led-control
+Microphone ─► Silero VAD ─► Moonshine STT ─► wake-word gate ─► Ollama LLM ─► MQTT publish
+                                                                                  │
+                                                                          mosquitto broker
+                                                                                  │
+                                                                 ESP32 (WLED) ◄── wled/clank/api
+                                                                      │
+                                                                  RGB LED strip
 ```
 
 1. **Voice activity detection** (Silero VAD) watches the microphone and fires when speech starts and ends.
 2. **Transcription** (Moonshine ONNX, local) converts the audio to text.
-3. **Intent parsing** (Ollama, local) maps the text to a structured JSON LED command.
-4. **Dispatch** — the validated JSON is POSTed to the ESP32 over **HTTPS (TLS)** with an API key header. The client pins the device's self-signed certificate, and the ESP32 enforces rate limiting and a constant-time API-key check.
+3. **Wake-word gate** — utterances that don't contain the wake word **"clank"** are discarded immediately: no LLM call, no logging, nothing retained.
+4. **Intent parsing** (Ollama, local) maps the command to a structured JSON object describing a colour, brightness, effect, and/or on-off state.
+5. **Dispatch** — Clank translates that to a [WLED JSON state object](https://kno.wled.ge/interfaces/json-api/) and publishes it to the MQTT topic `wled/clank/api`. The ESP32 runs **[WLED](https://kno.wled.ge/)** (configured for an analogue/PWM strip), subscribes to that topic, and applies the change.
+
+Clank and the broker run on the **same PC**; the ESP32 connects to the broker over WiFi. The two never talk directly — there is no device IP to configure on the Clank side. Running WLED also gives you its web UI, presets, and time-based effects for free.
 
 ---
 
 ## Hardware requirements
 
 - **ESP32** development board (any variant with WiFi — ESP32-DevKitC, WROOM, etc.)
-- **LEDs** wired to GPIO 18 (red), 23 (green), 16 (blue) — adjust pins in the firmware if needed
+- An **RGB LED strip** (common-cathode / "common-ground" analogue strip — *not* addressable WS2812)
+- **3 × NPN transistors** (e.g. 2N2222, BC337, or a logic-level N-MOSFET) to switch each colour channel, plus base resistors
+- A suitable power supply for the strip (5 V or 12 V depending on your strip)
 - A microphone accessible to your host machine (USB or built-in)
+
+### Wiring
+
+Each colour channel is low-side switched by a transistor: the ESP32 GPIO drives the **base/gate**, the strip's colour pin goes to the **collector/drain**, and the **emitter/source** goes to ground (shared with the strip's supply ground). Driving is **active-high** — a higher PWM duty = brighter.
+
+| Channel | ESP32 GPIO |
+|---|---|
+| Red   | **GPIO 13** |
+| Green | **GPIO 12** |
+| Blue  | **GPIO 33** |
+
+The pins are assigned in WLED's *Config → LED Preferences* (see [Step 6](#step-6--flash-and-configure-wled)). Pick output-capable GPIOs and avoid the strapping/flash pins (6–11, and ideally 0/2/15); if a colour comes out wrong, the channel order in WLED is swapped.
+
+> A pinout reference image for the dev board is included in the repo root if you need it.
 
 ---
 
@@ -71,12 +96,13 @@ Microphone ──► Silero VAD ──► Moonshine STT ──► Ollama LLM ─
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | 3.12 recommended |
+| Python 3.10+ | 3.12+ tested |
 | ~2 GB RAM | Moonshine base model |
 | ~250 MB disk | ONNX model weights |
 | Linux / macOS | Windows not tested |
 | Ollama | Local LLM server |
-| Arduino IDE 2.x **or** arduino-cli | For flashing the ESP32 |
+| mosquitto | Local MQTT broker |
+| Chrome or Edge browser | For flashing WLED via install.wled.me (Web Serial) |
 
 **System audio libraries (Linux):**
 ```bash
@@ -146,206 +172,193 @@ sha256sum -c SHA256SUMS    # both lines should print OK
 
 ---
 
-## Step 4 — Flash the ESP32 firmware
+## Step 4 — Wire the RGB strip
 
-The firmware serves **HTTPS** and will not compile until two gitignored headers exist: your credentials (`secrets.h`) and the TLS certificate (`cert.h`). Do these prerequisites first:
-
-1. **Create `secrets.h`** from the template and fill in your WiFi credentials and an API key:
-   ```bash
-   cp ESP32LEDs/secrets.h.example ESP32LEDs/secrets.h
-   # generate a key for CLANK_API_KEY:
-   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-   # then edit ESP32LEDs/secrets.h and set WIFI_SSID, WIFI_PASSWORD, CLANK_API_KEY
-   ```
-   > `secrets.h` is gitignored — your credentials are never committed. A non-empty `CLANK_API_KEY` enables authentication; leaving it `""` disables auth (dev/testing only).
-2. **Generate the TLS certificate** — writes `ESP32LEDs/cert.h` (firmware) and `certs/esp32.crt` (pinned by Clank). Pass the device's LAN IP so it lands in the certificate:
-   ```bash
-   python3 scripts/generate_esp32_cert.py --ip 192.168.0.18
-   ```
-   > `cert.h` contains the device's private key and is gitignored — never commit it. If the ESP32's IP changes, re-run this and re-flash.
-
-> **Static IP (optional but recommended).** The cert is pinned to one IP, so a stable address is convenient. Either reserve a DHCP lease on your router, or set a static IP in the firmware (see the `WiFi.config(...)` call and `local_IP` near the top of `ESP32LEDs.ino`).
-
-### Option A — Arduino IDE 2.x
-
-1. **Install Arduino IDE 2.x** from [arduino.cc/en/software](https://www.arduino.cc/en/software).
-
-2. **Add the ESP32 board package.**
-   Open *File → Preferences*, find *Additional boards manager URLs*, and add:
-   ```
-   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-   ```
-
-3. **Install the ESP32 core.**
-   Open *Tools → Board → Boards Manager*, search for `esp32` by Espressif, and click **Install**.
-
-4. **Install the ArduinoJson library.**
-   Open *Sketch → Include Library → Manage Libraries*, search for `ArduinoJson` by Benoit Blanchon, and install it (v6.x or 7.x).
-   > `WiFi`, `ESPmDNS`, and the TLS server (`esp_https_server`) all ship with the **ESP32 core 3.x** — no separate library needed. (Requires core **3.x**; the older `esp32_https_server` library is not used.)
-
-5. **Open the sketch.**
-   *File → Open* → navigate to `ESP32LEDs/ESP32LEDs.ino`.
-
-6. **Select your board and port.**
-   - *Tools → Board → esp32 → ESP32 Dev Module* (or whichever matches your hardware)
-   - *Tools → Port* → select the port your ESP32 is on (e.g. `/dev/ttyUSB0`, `/dev/ttyACM0`, or `COM3`)
-
-7. **Upload.**
-   Click the **→ Upload** button. The IDE compiles and flashes. When done, open *Tools → Serial Monitor* at 115200 baud — you should see the WiFi connection and IP address printed.
-
-### Option B — arduino-cli (command line)
-
-1. **Install arduino-cli.**
-   ```bash
-   # Linux / macOS (official install script)
-   curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-   # then add the installed binary to your PATH, e.g.:
-   export PATH="$HOME/bin:$PATH"
-   ```
-
-2. **Add the ESP32 board package URL and update the index.**
-   ```bash
-   arduino-cli config init
-   arduino-cli config add board_manager.additional_urls \
-     https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-   arduino-cli core update-index
-   ```
-
-3. **Install the ESP32 core (3.x) and ArduinoJson.**
-   ```bash
-   arduino-cli core install esp32:esp32
-   arduino-cli lib install "ArduinoJson"
-   # the TLS server (esp_https_server) ships with the ESP32 core — no extra lib
-   ```
-
-4. **Find your ESP32's port.**
-   ```bash
-   arduino-cli board list
-   # Look for a line with "Unknown" or "ESP32" — note the port (e.g. /dev/ttyUSB0)
-   ```
-
-5. **Compile and upload.**
-   ```bash
-   arduino-cli compile \
-     --fqbn esp32:esp32:esp32 \
-     ESP32LEDs/ESP32LEDs.ino
-
-   arduino-cli upload \
-     --fqbn esp32:esp32:esp32 \
-     --port /dev/ttyUSB0 \
-     ESP32LEDs/ESP32LEDs.ino
-   ```
-   Replace `/dev/ttyUSB0` with your actual port.
-
-6. **Confirm the upload.**
-   ```bash
-   arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
-   # Press Ctrl+C to exit the monitor
-   ```
-   You should see the device connect to WiFi and print its IP address.
-
-### Note the ESP32's IP address
-
-The IP is printed on the serial monitor each boot. You will need it in Step 6. If your router supports it, assign a static DHCP lease to the ESP32's MAC address so the IP never changes.
+Wire the strip to the ESP32 through the three transistors as described in [Hardware requirements](#wiring): **R → GPIO 13, G → GPIO 12, B → GPIO 33**, common ground shared with the strip's power supply. Power the strip from its own supply (not the ESP32's 3.3 V/5 V pin) — the GPIOs only drive the transistor bases, not the LED current.
 
 ---
 
-## Step 5 — Generate an API key
+## Step 5 — Set up the MQTT broker
 
-Generate a cryptographically random key:
+Clank and the ESP32 communicate through a local [mosquitto](https://mosquitto.org/) broker running on your PC.
+
+### Credentials
+
+Broker credentials live in the gitignored `ESP32LEDs/secrets.h` (the single source of truth shared by the firmware, the broker setup script, and Clank). Copy the template and fill it in:
+
 ```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+cp ESP32LEDs/secrets.h.example ESP32LEDs/secrets.h
+# generate a broker password:
+python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# then edit ESP32LEDs/secrets.h:
+#   WIFI_SSID / WIFI_PASSWORD   – the WiFi the ESP32 joins
+#   MQTT_BROKER                 – the PC's IP on that network (broker address)
+#   MQTT_USER / MQTT_PASS       – broker login (user is "clank" by default)
 ```
 
-Example output:
-```
-K3dRm9vXpQlTnYwZ8uBfA2sGcHeJiOkV1yMqCrNxDtL
-```
+> `MQTT_BROKER` is the PC running mosquitto. If the PC is a NetworkManager "shared" hotspot, it's the gateway `10.42.0.1`; on a home LAN, use the PC's LAN IP.
 
-**Flash the key into the ESP32** by setting `API_KEY` in `ESP32LEDs.ino` to this value and re-uploading (Steps 4.5–4.7 / 4.4–4.5 above).
+### Install and start mosquitto
 
-Alternatively, register the device through Clank's device manager, which prints the ready-to-paste C++ line:
+A helper script installs and configures the broker. It reads the username/password from `secrets.h`, writes a config that listens on port **1883** with anonymous access **disabled**, and enables the service:
+
 ```bash
-python3 register_device.py "Living-Room-LEDs"
-# Prints: const char* API_KEY = "K3dRm9vX...";
+sudo bash scripts/setup_mosquitto.sh
 ```
+
+(Currently targets Arch/pacman for the install step; on other distros install `mosquitto` with your package manager first, then re-run the script to do the config.)
+
+### Firewall
+
+If your PC runs a firewall, allow the ESP32's subnet to reach port 1883. For example, for a hotspot on `10.42.0.0/24` with `ufw`:
+
+```bash
+sudo ufw allow from 10.42.0.0/24 to any port 1883 proto tcp comment 'clank mqtt'
+```
+
+### Sync credentials to Clank
+
+Clank reads the broker login from `.env` (see [Step 7](#step-7--run-clank)); set `MQTT_USER`/`MQTT_PASS` there to the same values.
 
 ---
 
-## Step 6 — Run Clank
+## Step 6 — Flash and configure WLED
 
-Set environment variables and start:
+Clank drives the strip through [WLED](https://kno.wled.ge/), so the ESP32 runs WLED rather than a custom sketch. WLED handles the PWM, gives you a web UI and presets, and — crucially — provides the time-based **effects** Clank can trigger by voice.
 
+### 6a — Flash WLED
+
+1. Plug the ESP32 into this PC over USB and open **[install.wled.me](https://install.wled.me)** in **Chrome or Edge** (Web Serial is required; Firefox won't work).
+2. Click **Install**, pick the latest stable release, select the serial port (e.g. `/dev/ttyUSB0`) and let it flash.
+   > If it reports *"Serial port is not ready"*, another program holds the port — close other serial monitors/Arduino IDE, and close any stale install.wled.me tab (the browser keeps the port open). On Linux you may need to be in the `dialout` group.
+3. When prompted, **Connect to Wi-Fi** and join the same `clank-net` hotspot the broker lives on (see [Step 5](#step-5--set-up-the-mqtt-broker)). The board reboots onto the hotspot.
+
+### 6b — Point WLED at the strip and the broker
+
+Find the device's IP from your hotspot's DHCP leases (e.g. `ip neigh show dev wlan0 | grep 10.42`), then either use the web UI or push the config over HTTP. Web UI route:
+
+1. Open `http://<wled-ip>/` → **Config → LED Preferences**.
+2. Add an output of type **Analog (PWM) RGB**, length **1**, with the three GPIOs **in R, G, B order**: `13, 12, 33`. Save (the board reboots).
+3. **Config → Sync Interfaces → MQTT:** enable it, set **Broker** `10.42.0.1`, **Port** `1883`, your **Username/Password** (the `MQTT_USER`/`MQTT_PASS` from `secrets.h`), and **Device Topic** `wled/clank`. Save.
+
+Or do both in one shot via the JSON config API (replace the password):
 ```bash
-# Activate the virtual environment if not already active
-source .venv/bin/activate
-
-# Required: your ESP32's IP address
-export ESP32_IP=192.168.0.18
-
-# Required: the API key you generated in Step 5
-export ESP32_API_KEY=K3dRm9vXpQlTnYwZ8uBfA2sGcHeJiOkV1yMqCrNxDtL
-
-# Required for HTTPS: the pinned ESP32 certificate from Step 4
-export ESP32_CA_CERT=certs/esp32.crt
-
-# Optional: change the Ollama model (default: qwen3:4b)
-export CLANK_LLM_MODEL=qwen3:4b
-
-python3 src/voicecommand/voice_LED_control.py
+curl -X POST http://<wled-ip>/json/cfg -H 'Content-Type: application/json' -d '{
+  "hw":{"led":{"total":1,"ins":[{"start":0,"len":1,"pin":[13,12,33],"type":43}]}},
+  "if":{"mqtt":{"en":true,"broker":"10.42.0.1","port":1883,
+    "user":"clank","psk":"your-broker-password","rtn":true,
+    "topics":{"device":"wled/clank","group":"wled/all"}}}
+}'
 ```
+LED type `43` is WLED's 3-channel analog (RGB) bus. A single virtual pixel (`len:1`) is what makes the whole strip animate together — the right behaviour for an analogue strip.
 
-Or use the startup script, which loads variables from a `.env` file automatically:
+Verify the strip responds before moving on:
 ```bash
-# Create a .env file (never commit this file)
+curl 'http://<wled-ip>/win&A=255&R=255&G=0&B=0'   # full red
+```
+If red lights a different colour, your R/G/B pin order is swapped — fix it in LED Preferences.
+
+> **Legacy alternative:** a minimal custom MQTT/PWM sketch (no effects) still lives in `ESP32LEDs/` if you'd rather not run WLED. It subscribes to `clank/rgb/set` with `{state,r,g,b,brightness}`; you'd set `mqtt.rgb_set_topic` back to that and flash it with the Arduino IDE / arduino-cli.
+
+---
+
+## Step 7 — Run Clank
+
+Clank reads configuration from `.env` (loaded automatically by `start_clank.sh`). Create it (never commit this file):
+
+```bash
 cat > .env <<'EOF'
-ESP32_IP=192.168.0.18
-ESP32_API_KEY=your-key-here
-ESP32_CA_CERT=certs/esp32.crt
+MQTT_USER=clank
+MQTT_PASS=your-broker-password
 CLANK_LLM_MODEL=qwen3:4b
 EOF
+```
 
+Then start:
+```bash
 ./start_clank.sh
 ```
 
-Clank prints `Listening. Press Ctrl+C to quit.` when it is ready.
+Clank prints `Listening. Press Ctrl+C to quit.` when ready. You should also see:
+```
+MQTT RGB controller -> 127.0.0.1:1883 topic 'wled/clank/api'
+```
+
+> **Tip:** if the strip seems to fire on background noise, your mic gain is too high — lower the input volume or raise `audio.vad_threshold`.
+
+### Quick test without a microphone
+
+You can drive the strip directly to confirm the broker → ESP32 path before testing voice:
+```bash
+mosquitto_pub -h 127.0.0.1 -u clank -P 'your-broker-password' \
+  -t wled/clank/api -m '{"on":true,"bri":180,"seg":[{"col":[[255,0,0]]}]}'
+```
 
 ---
 
 ## Voice commands
 
-Speak naturally. Clank responds to LED commands addressed to "Computer":
+Say the wake word **"clank"**, then a command. Clank controls one RGB strip — colour, brightness, on/off, and time-based effects:
 
 | What you say | What happens |
 |---|---|
-| "Computer, turn on the red LED" | Red LED on |
-| "Computer, turn off the blue light" | Blue LED off |
-| "Computer, set green LED to 50%" | Green LED at 50% brightness |
-| "Computer, turn on all LEDs" | All three LEDs on |
-| "Computer, turn off all lights" | All three LEDs off |
+| "clank, turn the lights on" | Strip on (last colour) |
+| "clank, turn off the lights" | Strip off |
+| "clank, make it red" | Strip red |
+| "clank, set the strip to blue" | Strip blue |
+| "clank, warm white at half brightness" | Warm white, 50% |
+| "clank, dim to 20 percent" | Brightness 20% |
+| "clank, make the lights breathe" | Breathe effect |
+| "clank, cycle through colours" | Colorloop effect |
+| "clank, candle mode in orange" | Candle flicker, orange |
+| "clank, strobe the lights" | Strobe effect |
+| "clank, make the strobe quicker" | Speed up the running effect |
+| "clank, make the effect more intense" | Raise effect intensity |
+| "clank, stop the effect" | Back to solid colour |
 
-Anything that does not map to an LED command is logged and discarded.
+Setting a colour, brightness, effect, speed, or intensity implies the strip turns on. Anything not about the light strip is discarded.
+
+**Recognised colours:** red, green, blue, white, warm white, yellow, orange, amber, purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold. (Defined in `src/voicecommand/validation.py` → `COLOR_RGB`.)
+
+**Recognised effects:** solid, blink, breathe, fade, saw, sine, heartbeat, random, dynamic, colorloop, rainbow, strobe, strobe rainbow, strobe mega, blink rainbow, lightning, candle, fire (plus spoken synonyms). These are limited to effects that animate the *whole* strip over time — spatial effects (wipe, chase, sparkle, comet…) need addressable pixels and aren't meaningful on an analogue strip, so they're deliberately excluded. (Mapped to WLED effect IDs in `validation.py` → `WLED_EFFECTS`.)
+
+**Effect speed & intensity:** say "faster"/"quicker"/"slower" to change how fast the active effect animates, or "more/less intense" for its strength — e.g. *"make the strobe quicker"*. These map to WLED's per-segment `sx`/`ix` and adjust whatever effect is already running without restarting it.
+
+### MQTT payload format
+
+Clank publishes [WLED JSON state objects](https://kno.wled.ge/interfaces/json-api/) to `wled/clank/api`. Colour and effect go in the segment; on/off and brightness are top-level. For example "candle mode in orange" becomes:
+```json
+{ "on": true, "seg": [ { "col": [[255, 80, 0]], "fx": 88 } ] }
+```
+WLED also publishes its own state on `wled/clank/...` and supports the full JSON API, so you can build presets and richer automations on top.
+
+---
+
+## Wake word
+
+Clank only acts on speech that contains the wake word. There are two engines, selected by `audio.wake_engine`:
+
+- **`text`** (default) — every utterance is transcribed, then the word **"clank"** is matched in the transcript (fuzzy, so mishearings like "clink"/"crank" still trigger). Simple and reliable; speech-to-text runs continuously.
+- **`openwakeword`** (experimental) — a small acoustic model detects the wake word from the raw audio *before* transcription, so Moonshine stays idle until you speak the wake word (lower CPU, stronger privacy). Requires a wake-word model; the bundled ones are SHA256-pinned and integrity-checked at load. A custom **"hey clank"** model is being trained but is not enabled by default.
+
+Stick with `text` unless you have a tuned acoustic model.
 
 ---
 
 ## Configuration reference
 
-All settings live in `config/default.yaml` and can be overridden by environment variables.
+All settings live in `config/default.yaml`; secrets and a few overrides come from environment variables (via `.env`).
 
 ### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `ESP32_IP` | `192.168.0.18` | IP address of the ESP32 |
-| `ESP32_API_KEY` | *(none)* | Shared API key for ESP32 authentication |
-| `ESP32_CA_CERT` | *(none)* | Path to the pinned ESP32 certificate (`certs/esp32.crt`). When set, Clank connects over **HTTPS** and verifies against it. |
-| `ESP32_USE_HTTPS` | `false` | Force HTTPS even without a pinned cert (uses system trust — generally only useful for testing). |
+| `MQTT_USER` | `clank` | MQTT broker username |
+| `MQTT_PASS` | *(none)* | MQTT broker password (must match the broker) |
 | `CLANK_LLM_MODEL` | `qwen3:4b` | Ollama model name |
-| `CLANK_CONFIG` | `config/default.yaml` | Path to config file |
 | `CLANK_LLM_ENDPOINT` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
+| `CLANK_CONFIG` | `config/default.yaml` | Path to config file |
 | `CLANK_LOG_LEVEL` | `INFO` | Log level (DEBUG / INFO / WARNING / ERROR) |
-
-If neither `ESP32_CA_CERT` nor `ESP32_USE_HTTPS` is set, Clank falls back to plain HTTP — use this only with the legacy non-TLS firmware.
 
 ### config/default.yaml (key sections)
 
@@ -355,56 +368,26 @@ audio:
   vad_threshold: 0.5          # 0.0–1.0, raise to reduce false triggers
   min_silence_duration_ms: 300
   max_speech_seconds: 15
+  wake_word: "clank"
+  require_wake_word: true
+  wake_engine: "text"         # "text" or "openwakeword"
+
+mqtt:
+  broker_host: "127.0.0.1"    # Clank → broker (same PC)
+  broker_port: 1883
+  rgb_set_topic: "wled/clank/api"   # WLED JSON API topic (<device>/api)
 
 llm:
   model: "qwen3:4b"
   temperature: 0.0
   max_tokens: 150
-  timeout: 30.0
-  response_format: "json"   # force a single valid JSON object
-  think: false              # disable qwen3 "thinking" (set null for non-reasoning models)
-
-network:
-  use_service_discovery: true  # auto-discover ESP32 via mDNS
-  connection_timeout: 10.0
+  timeout: 90.0
+  response_format: "json"     # force a single valid JSON object
+  think: false                # disable qwen3 "thinking" (set null for non-reasoning models)
 
 security:
-  max_requests_per_minute: 60
+  log_transcripts: false      # keep raw speech ephemeral; true only for debugging
   enable_audit_logging: true
-```
-
-### Regenerating the ESP32 TLS certificate
-
-The ESP32 serves HTTPS with a self-signed certificate that Clank pins. The certificate is generated in [Step 4](#step-4--flash-the-esp32-firmware) and bound to the device's IP. Regenerate it whenever the ESP32's IP changes, then **re-flash the firmware** (the cert is embedded in `cert.h`):
-```bash
-python3 scripts/generate_esp32_cert.py --ip <device-ip>
-export ESP32_CA_CERT=certs/esp32.crt
-```
-This writes `ESP32LEDs/cert.h` (firmware) and `certs/esp32.crt` (pinned by Clank). Both are gitignored.
-
----
-
-## Device management
-
-Register a device and get the API key line ready for the firmware:
-```bash
-python3 register_device.py "Kitchen-LEDs"
-# Device registered successfully!
-# Device ID: device_abc123...
-# API Key: K3dRm9vX...
-# Add this to your ESP32 configuration:
-# const char* API_KEY = "K3dRm9vX...";
-```
-
-List registered devices:
-```python
-python3 - <<'EOF'
-from src.voicecommand.auth import AuthManager
-auth = AuthManager()
-for d in auth.list_devices():
-    status = "active" if d.is_active else "revoked"
-    print(f"{d.name} ({d.device_id}) — {status}")
-EOF
 ```
 
 ---
@@ -417,17 +400,16 @@ EOF
 | `logs/audit.log` | Security events in JSON format |
 
 ```bash
-# Follow application log
-tail -f logs/clank.log
-
-# Watch security events (requires jq)
-tail -f logs/audit.log | jq '.'
-
-# Check for authentication failures
-grep '"event_type": "auth_failure"' logs/audit.log
+tail -f logs/clank.log                 # follow application log
+tail -f logs/audit.log | jq '.'        # watch security events (needs jq)
 ```
 
-Sensitive fields (API keys, tokens, IP addresses) are automatically redacted in `clank.log`.
+By default only resolved commands are logged (e.g. `Command(rgb): {'color': 'red'}`), never raw transcripts. Sensitive fields are redacted in `clank.log`.
+
+You can also watch the live MQTT traffic:
+```bash
+mosquitto_sub -h 127.0.0.1 -u clank -P 'your-broker-password' -t 'clank/#' -v
+```
 
 ---
 
@@ -435,16 +417,17 @@ Sensitive fields (API keys, tokens, IP addresses) are automatically redacted in 
 
 | Feature | Detail |
 |---|---|
-| **Model integrity** | SHA256 hashes verified before any model is loaded |
-| **Commit-locked downloads** | Weights pinned to audited commit `2501abf` |
-| **No network calls at runtime** | All AI runs locally; no data leaves the machine |
-| **Input validation** | Transcribed text is sanitised and length-bounded before reaching the LLM prompt, preventing prompt injection via crafted audio |
-| **LLM response validation** | JSON output is checked against an allowlist of valid actions, colours, and states before dispatch |
-| **HTTPS (TLS) transport** | The ESP32 serves HTTPS; Clank connects over TLS and pins the device's self-signed certificate (`ESP32_CA_CERT`) |
-| **ESP32 authentication** | `POST /led-control` requires a matching `X-API-Key` header (constant-time comparison); unauthenticated requests get 401 |
-| **Rate limiting** | 60 requests per minute, enforced **on the ESP32** before authentication (throttles brute-force); excess requests get 429 |
-| **mDNS device discovery** | ESP32 advertises `_clank-led._tcp` (with a `secure` TXT record) so Clank finds it without hardcoded IPs |
+| **Local-only** | STT, LLM, and the broker all run on your machine; no data leaves it at runtime |
+| **Ephemeral speech** | Non-command utterances are discarded at the wake-word gate; raw transcripts are never persisted unless `log_transcripts` is enabled |
+| **Model integrity** | Moonshine weights are SHA256-verified before load; openWakeWord models are hash-pinned and integrity-checked |
+| **Commit-locked downloads** | Moonshine weights pinned to audited commit `2501abf` |
+| **Input validation** | Transcribed text is sanitised and length-bounded before reaching the LLM prompt |
+| **LLM response validation** | JSON output is checked against an allowlist of actions, colours, and states before dispatch |
+| **MQTT authentication** | The broker requires a username/password; anonymous access is disabled |
+| **Scoped firewall** | Recommended `ufw` rule limits broker access to the local device subnet |
 | **Structured audit logging** | Security events written to a separate JSON log with automatic redaction |
+
+> **Note:** MQTT on port 1883 is unencrypted. On an isolated hotspot this is acceptable; for a shared LAN consider enabling MQTT over TLS (port 8883) on both the broker and firmware.
 
 ---
 
@@ -483,20 +466,6 @@ We found **no suspicious parallel branches** in commit `2501abf`. The hashes in 
 
 ---
 
-## Re-auditing and updating models
-
-1. Create a new branch.
-2. Update `MOON_COMMIT` inside `scripts/fetch_moonshine.sh`.
-3. Run the script, inspect graphs in Netron, update `SHA256SUMS`:
-   ```bash
-   sha256sum models/moonshine/encoder_model.onnx \
-             models/moonshine/decoder_model_merged.onnx > SHA256SUMS
-   ```
-4. Open a PR summarising what you checked (Netron screenshots welcome).
-5. Once merged, users re-run the quick-start and stay safe.
-
----
-
 ## Troubleshooting
 
 **"No module named 'sounddevice'"**
@@ -506,20 +475,21 @@ brew install portaudio                  # macOS
 pip install sounddevice
 ```
 
+**Clank doesn't react to my voice**
+- Check the mic is the one Python uses: `python3 -c "import sounddevice as sd; print(sd.query_devices())"` and confirm the default input is your mic (not muted).
+- Remember you must say the wake word **"clank"** first; non-wake speech is silently discarded.
+- If it triggers on noise instead, your mic gain is too high — lower it or raise `audio.vad_threshold`.
+
+**ESP32 serial shows `failed (rc=-2)` (MQTT)**
+- The broker isn't reachable. Confirm `mosquitto` is running (`systemctl is-active mosquitto`), the firewall allows the ESP32's subnet on 1883, and `MQTT_BROKER` in `secrets.h` is the PC's address on the ESP32's network.
+
+**WLED connects but the strip doesn't light / wrong colours**
+- Verify the transistor wiring and that the strip has its own power and shared ground.
+- If "red" shows as another colour, the channel order is swapped — fix the R/G/B pin order in WLED's *Config → LED Preferences*.
+- Confirm WLED's MQTT is enabled and pointed at the broker (*Config → Sync Interfaces → MQTT*); the strip should react to a manual `mosquitto_pub` to `wled/clank/api`.
+
 **"SHA256 mismatch" on startup**
-The model file is corrupt or was modified. Re-run `./scripts/fetch_moonshine.sh` and verify again with `sha256sum -c SHA256SUMS`.
-
-**"Error sending command to ESP32" / connection refused**
-- Confirm the ESP32 is powered and connected to WiFi (check serial monitor).
-- Confirm `ESP32_IP` matches the address printed on the serial monitor.
-- Check that `ESP32_API_KEY` matches `API_KEY` in the firmware exactly.
-
-**ESP32 serial monitor shows nothing after flashing**
-- Make sure the baud rate is set to **115200**.
-- Press the **EN/RST** button on the ESP32 to trigger a reboot and print the startup output.
-
-**"401 Authentication failed" in Clank logs**
-The `ESP32_API_KEY` environment variable and the `API_KEY` constant in `ESP32LEDs.ino` do not match. Re-flash the firmware with the correct key.
+Re-run `./scripts/fetch_moonshine.sh` and verify with `sha256sum -c SHA256SUMS`.
 
 **Ollama connection refused**
 ```bash
@@ -527,18 +497,9 @@ ollama serve   # start the server
 ollama list    # confirm your model is pulled
 ```
 
-**No devices found via mDNS discovery**
-```bash
-# Linux — check the ESP32 is advertising
-avahi-browse -r _clank-led._tcp
-
-# macOS
-dns-sd -B _clank-led._tcp
-```
-If nothing appears, confirm `ESPmDNS` is included in the firmware and the ESP32 is on the same subnet.
-
-**VAD triggers too easily on background noise**
-Raise `vad_threshold` in `config/default.yaml` (e.g. from `0.5` to `0.7`).
+**WLED isn't reachable after flashing**
+- It only joins WiFi once you complete the **Connect to Wi-Fi** step in the installer. If you skipped it, the board falls back to its own `WLED-AP` (password `wled1234`) — join that from a phone and set the WiFi there.
+- Find its address from the hotspot leases: `ip neigh show dev wlan0 | grep 10.42`.
 
 ---
 
@@ -549,16 +510,13 @@ clank/
 ├── README.md                    ← this file
 ├── LICENSE
 ├── requirements.txt             ← Python dependencies
-├── requirements-secure.txt      ← extended dependency list (for development)
 ├── SHA256SUMS                   ← model digests
-├── install.sh                   ← one-command automated installer
 ├── start_clank.sh               ← startup script (loads .env, activates venv)
-├── register_device.py           ← CLI helper to register an ESP32 and get its API key
+├── register_device.py           ← CLI helper (legacy API-key device registration)
 │
 ├── config/
-│   └── default.yaml             ← all tunable settings
+│   └── default.yaml             ← all tunable settings (audio, mqtt, llm, security)
 │
-├── certs/                       ← auto-generated TLS certificates (gitignored)
 ├── logs/                        ← application and audit logs (gitignored)
 ├── models/
 │   └── moonshine/               ← ONNX weights (fetched by fetch_moonshine.sh)
@@ -567,26 +525,24 @@ clank/
 │
 ├── scripts/
 │   ├── fetch_moonshine.sh       ← downloads pinned, verified model weights
-│   ├── generate_esp32_cert.py   ← generates the ESP32 TLS cert (cert.h + esp32.crt)
-│   └── generate_certs.py        ← generic self-signed cert helper
+│   └── setup_mosquitto.sh       ← installs/configures the MQTT broker
 │
 ├── src/
 │   ├── assets/
 │   │   └── tokenizer.json       ← Moonshine subword tokenizer
 │   └── voicecommand/
-│       ├── voice_LED_control.py         ← main application entry point
-│       ├── onnx_model.py                ← SHA256-verified model loader
-│       ├── config.py                    ← typed config with env-var overrides
-│       ├── validation.py                ← input/output sanitisation and allowlists
-│       ├── auth.py                      ← device registration and API key management
-│       ├── discovery.py                 ← mDNS auto-discovery of ESP32 devices
-│       └── secure_logging.py            ← rotating logs and audit log with redaction
+│       ├── voice_LED_control.py ← main app: VAD → STT → wake gate → LLM → MQTT
+│       ├── onnx_model.py        ← SHA256-verified Moonshine loader
+│       ├── config.py            ← typed config with env-var overrides
+│       ├── validation.py        ← input/output sanitisation, set_rgb + colour/effect maps
+│       ├── secure_logging.py    ← rotating logs and audit log with redaction
+│       ├── auth.py / discovery.py ← legacy device auth + mDNS helpers
+│       └── ...
 │
-└── ESP32LEDs/
-    ├── ESP32LEDs.ino            ← ESP32 firmware (HTTPS via esp_https_server, mDNS, auth, rate limiting)
-    ├── secrets.h.example        ← template for WiFi creds + API key (copy to secrets.h)
-    ├── secrets.h                ← your WiFi creds + API key (gitignored)
-    └── cert.h                   ← generated TLS cert/key for the firmware (gitignored)
+└── ESP32LEDs/                   ← legacy custom firmware (no effects); WLED is the default
+    ├── ESP32LEDs.ino            ← minimal MQTT RGB strip via PWM + NPN
+    ├── secrets.h.example        ← template for WiFi + MQTT creds (copy to secrets.h)
+    └── secrets.h                ← your WiFi + MQTT creds (gitignored)
 ```
 
 ---
