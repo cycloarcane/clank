@@ -362,6 +362,12 @@ _KNOWN_OWW_SHA256 = {
     "alexa_v0.1.onnx":       "6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e",
     "hey_mycroft_v0.1.onnx": "785bdf5655863ae47553b23793aa108c7b0152d4823f7869b41f2d2d765912fc",
     "hey_marvin_v0.1.onnx":  "b6d4b794ddf2e1d6f29e9f45848e24858e2edd0d810b14e0c1c70dda9a1fcbf0",
+    # Our own "hey clank" model, trained locally (openWakeWord 0.4.0 pipeline)
+    # and committed at models/wakeword/hey_clank.onnx. Audited 2026-06-11:
+    # ai.onnx opset 13, standard DNN ops only (Gemm/Relu/Sigmoid/...), no custom
+    # domains, no external data, no metadata, no embedded URLs/paths; loads and
+    # runs under the stock onnxruntime CPU provider.
+    "hey_clank.onnx":        "1d0dfa7ba9ead226b62c222c38b99bb5ea8262eb116996251e9d6289162d72c1",
 }
 
 
@@ -436,6 +442,15 @@ class WakeWordDetector:
         """Resolve a builtin model name or a path to a .onnx file."""
         if os.path.exists(spec):
             return spec
+        # A relative path (e.g. the default models/wakeword/hey_clank.onnx) may
+        # be given against the repo root rather than the current directory, so
+        # try resolving it there before falling back to the builtin lookup.
+        repo_root = os.path.normpath(
+            os.path.join(CLANK_MOONSHINE_DEMO_DIR, "..", "..")
+        )
+        repo_rel = os.path.join(repo_root, spec)
+        if os.path.exists(repo_rel):
+            return repo_rel
         import openwakeword
 
         mdir = os.path.join(

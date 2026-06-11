@@ -27,12 +27,16 @@ class AudioConfig:
     #                   the transcript (simple, but STT runs constantly).
     #   "openwakeword"— a small acoustic model gates BEFORE transcription, so
     #                   Moonshine stays idle until the wake word fires.
-    wake_engine: str = "text"
+    wake_engine: str = "openwakeword"
     # openWakeWord settings (only used when wake_engine == "openwakeword").
     # oww_model: a builtin name ("hey_jarvis", "alexa", "hey_mycroft",
-    # "hey_marvin") or a path to a custom-trained .onnx model.
-    oww_model: str = "hey_jarvis"
-    oww_threshold: float = 0.5
+    # "hey_marvin") or a path to a custom-trained .onnx model. Defaults to our
+    # locally-trained "hey clank" model (hash-pinned in voice_LED_control.py).
+    oww_model: str = "models/wakeword/hey_clank.onnx"
+    # 0.3 is deliberately sensitive: "hey clank" is a rare two-word phrase, so we
+    # optimise for recall (the trained model sits at ~0.09 false positives/hour,
+    # leaving plenty of headroom). Raise toward 0.5 if you get false triggers.
+    oww_threshold: float = 0.3
     # Max seconds to wait for a command after the wake word fires.
     command_timeout_s: float = 6.0
     # Pre-roll: seconds of audio kept before the wake word fires and prepended

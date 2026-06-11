@@ -16,12 +16,15 @@ audio:
   require_wake_word: true
   # Wake detection engine: "text" (transcribe-then-match) or "openwakeword"
   # (acoustic model gates before STT — lower CPU, true capture gate).
-  wake_engine: "text"
+  wake_engine: "openwakeword"
   # openWakeWord settings (used only when wake_engine == "openwakeword").
   # oww_model: builtin name (hey_jarvis / alexa / hey_mycroft / hey_marvin)
-  # or a path to a custom-trained .onnx.
-  oww_model: "hey_jarvis"
-  oww_threshold: 0.5
+  # or a path to a custom-trained .onnx. Default is our locally-trained
+  # "hey clank" model (hash-pinned in voice_LED_control.py).
+  oww_model: "models/wakeword/hey_clank.onnx"
+  # Sensitive on purpose — "hey clank" is rare, so we favour recall (the model
+  # sits at ~0.09 false positives/hour). Raise toward 0.5 if it over-triggers.
+  oww_threshold: 0.3
   command_timeout_s: 6.0
   # Audio kept before the wake word fires and prepended to the command, so a
   # fast onset (e.g. "all") isn't clipped by wake-detection latency.
