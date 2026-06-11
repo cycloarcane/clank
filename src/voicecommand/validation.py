@@ -138,14 +138,19 @@ class LEDCommand:
 
 class CommandValidator:
     """Validates and sanitizes voice commands."""
-    
+
     # Controllable loads — must match the LOADS table in the ESP32 firmware.
     # "all" is accepted as a broadcast to every load.
     VALID_LOADS = {"big_lights", "leds", "all"}
     VALID_STATES = {"on", "off"}
 
-    def __init__(self):
+    def __init__(self, registry=None):
         self.logger = logging.getLogger(__name__)
+        # Device registry (voicecommand.devices.DeviceRegistry). When provided,
+        # set_rgb / set_switch commands resolve their "target" to a known device
+        # and the device's type is checked against the action. When None (e.g.
+        # in unit tests), target is passed through unresolved.
+        self.registry = registry
 
         # Patterns for malicious content detection
         self.malicious_patterns = [
@@ -203,7 +208,7 @@ class CommandValidator:
             raise ValidationError("Action must be a string")
         
         # Validate action type
-        valid_actions = ["set_load", "set_rgb", "unknown"]
+        valid_actions = ["set_load", "set_rgb", "set_switch", "unknown"]
         if action not in valid_actions:
             raise ValidationError(f"Invalid action: {action}. Must be one of {valid_actions}")
 
@@ -227,7 +232,22 @@ class CommandValidator:
             if not isinstance(params, dict):
                 raise ValidationError("Parameters must be an object")
 
-            return self._validate_rgb_parameters(params)
+            result = self._validate_rgb_parameters(params)
+            result["target"] = self._resolve_target(action, data.get("target"))
+            return result
+
+        # Validate on/off smart-plug parameters
+        if action == "set_switch":
+            if "parameters" not in data:
+                raise ValidationError("set_switch action requires parameters")
+
+            params = data["parameters"]
+            if not isinstance(params, dict):
+                raise ValidationError("Parameters must be an object")
+
+            result = self._validate_switch_parameters(params)
+            result["target"] = self._resolve_target(action, data.get("target"))
+            return result
 
         # For unknown actions, just ensure no dangerous parameters
         elif action == "unknown":
@@ -326,6 +346,48 @@ class CommandValidator:
                 "effect, speed, or intensity"
             )
         return {"action": "set_rgb", "parameters": validated}
+
+    def _validate_switch_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate set_switch parameters (just an on/off state)."""
+        state = params.get("state")
+        if not isinstance(state, str):
+            raise ValidationError("state must be a string")
+        state = state.lower().strip()
+        if state not in self.VALID_STATES:
+            raise ValidationError(
+                f"Invalid state: {state}. Must be one of {sorted(self.VALID_STATES)}"
+            )
+        return {"action": "set_switch", "parameters": {"state": state}}
+
+    def _resolve_target(self, action: str, target: Any) -> Optional[str]:
+        """Resolve a command's target to a known device's canonical name.
+
+        With no registry (unit tests) the raw target string is passed through.
+        With a registry, the target must resolve to a device whose type the
+        action can drive (e.g. set_switch -> a switch); an unknown or
+        type-mismatched target is rejected so a misheard name never fires the
+        wrong device.
+        """
+        if target is not None and not isinstance(target, str):
+            raise ValidationError("target must be a string")
+        if self.registry is None:
+            return target.lower().strip() if isinstance(target, str) else None
+
+        from voicecommand.devices import ACTION_TYPES
+        kind = ACTION_TYPES.get(action)
+        device = self.registry.resolve(target, kind)
+        if device is None:
+            named = f"{target!r}" if target else "(no target given)"
+            raise ValidationError(
+                f"Could not resolve target {named} to a configured device for "
+                f"{action}. Known devices: "
+                f"{sorted(d.name for d in self.registry.devices)}"
+            )
+        if kind and device.type not in kind:
+            raise ValidationError(
+                f"Device {device.name!r} ({device.type}) cannot handle {action}"
+            )
+        return device.name
 
     def _validate_led_parameters(self, params: Dict[str, Any], full_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate LED control parameters."""

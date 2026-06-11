@@ -1,0 +1,45 @@
+# Clank device registry — the things Clank can control, by the names you speak.
+#
+# Add a device by adding an entry here and restarting Clank. No code changes and
+# no firmware "sketch" to edit: WLED and OpenBeken/Tasmota plugs are independent
+# MQTT devices, so Clank only needs each one's spoken name, type, and MQTT topic.
+# Point every device's MQTT at the broker (the hotspot gateway, 10.42.0.1).
+#
+# Fields:
+#   name     canonical name you say ("strip", "desk lamp")
+#   type     "wled"  -> colour / brightness / effects (WLED JSON state object)
+#            "switch"-> plain on/off plug (raw payload, e.g. OpenBeken/Tasmota)
+#   topic    MQTT topic Clank publishes commands to
+#   aliases  other things you might say / common STT mishearings (optional)
+#
+# switch-only fields (default ON/OFF, which OpenBeken & Tasmota both accept):
+#   on_payload / off_payload   the exact string sent to switch a plug
+#
+# wled-only field:
+#   persist_preset   snapshot the look into this WLED preset after each command
+#                    so a mains power-cycle restores it (0 disables). Omit to use
+#                    the global mqtt.persist_preset from config/default.yaml.
+
+devices:
+  # The WLED RGB strip. Commands are published as WLED JSON state objects to its
+  # API topic (wled/clank/api). This is the device migrated from the old
+  # single-strip setup, so a command with no explicit target still lands here.
+  - name: strip
+    type: wled
+    topic: wled/clank/api
+    aliases: [leds, led, led strip, the lights, the light, mood lights, lights]
+    persist_preset: 1
+
+  # ---------------------------------------------------------------------------
+  # Example on/off smart plug running OpenBeken (or Tasmota). Uncomment and edit
+  # once you've flashed a plug and pointed its MQTT broker at 10.42.0.1.
+  # `topic` is the plug's Tasmota-style command topic; OpenBeken answers
+  # cmnd/<name>/POWER with ON/OFF. Set/confirm the base name in the plug's web
+  # UI (Config -> MQTT). Then "turn off the desk lamp" just works.
+  #
+  # - name: desk lamp
+  #   type: switch
+  #   topic: cmnd/desk_lamp/POWER
+  #   aliases: [desk light, lamp, desk]
+  #   on_payload: "ON"
+  #   off_payload: "OFF"
