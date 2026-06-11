@@ -512,20 +512,22 @@ clank/
 ├── requirements.txt             ← Python dependencies
 ├── SHA256SUMS                   ← model digests
 ├── start_clank.sh               ← startup script (loads .env, activates venv)
-├── register_device.py           ← CLI helper (legacy API-key device registration)
 │
 ├── config/
-│   └── default.yaml             ← all tunable settings (audio, mqtt, llm, security)
+│   ├── default.yaml             ← all tunable settings (audio, mqtt, llm)
+│   └── devices.yaml             ← device registry: strips + plugs by spoken name
 │
 ├── logs/                        ← application and audit logs (gitignored)
 ├── models/
-│   └── moonshine/               ← ONNX weights (fetched by fetch_moonshine.sh)
-│       ├── encoder_model.onnx
-│       └── decoder_model_merged.onnx
+│   ├── moonshine/               ← ONNX weights (fetched by fetch_moonshine.sh)
+│   │   ├── encoder_model.onnx
+│   │   └── decoder_model_merged.onnx
+│   └── wakeword/hey_clank.onnx  ← custom wake-word model (SHA256-pinned)
 │
 ├── scripts/
 │   ├── fetch_moonshine.sh       ← downloads pinned, verified model weights
-│   └── setup_mosquitto.sh       ← installs/configures the MQTT broker
+│   ├── setup_mosquitto.sh       ← installs/configures the MQTT broker
+│   └── plug_jukebox.py          ← play a rhythm on the smart plugs (for fun)
 │
 ├── src/
 │   ├── assets/
@@ -534,10 +536,9 @@ clank/
 │       ├── voice_LED_control.py ← main app: VAD → STT → wake gate → LLM → MQTT
 │       ├── onnx_model.py        ← SHA256-verified Moonshine loader
 │       ├── config.py            ← typed config with env-var overrides
-│       ├── validation.py        ← input/output sanitisation, set_rgb + colour/effect maps
-│       ├── secure_logging.py    ← rotating logs and audit log with redaction
-│       ├── auth.py / discovery.py ← legacy device auth + mDNS helpers
-│       └── ...
+│       ├── devices.py           ← device registry (resolve target, build prompt)
+│       ├── validation.py        ← input/output sanitisation; set_rgb + set_switch
+│       └── secure_logging.py    ← rotating logs and audit log with redaction
 │
 └── ESP32LEDs/                   ← legacy custom firmware (no effects); WLED is the default
     ├── ESP32LEDs.ino            ← minimal MQTT RGB strip via PWM + NPN

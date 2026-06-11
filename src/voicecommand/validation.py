@@ -3,9 +3,7 @@
 import re
 import json
 import logging
-from typing import Dict, Any, Optional, List, Union
-from dataclasses import dataclass
-from enum import Enum
+from typing import Dict, Any, Optional
 
 class ValidationError(Exception):
     """Custom exception for validation errors."""
@@ -102,50 +100,18 @@ WLED_EFFECTS = {
     "television":     116,
 }
 
-class LEDColor(Enum):
-    """Valid LED colors."""
-    RED = "red"
-    GREEN = "green"
-    BLUE = "blue"
-    ALL = "all"
-
-class LEDState(Enum):
-    """Valid LED states."""
-    ON = "on"
-    OFF = "off"
-    TOGGLE = "toggle"
-
-@dataclass
-class LEDCommand:
-    """Validated LED command structure."""
-    action: str
-    color: Optional[str] = None
-    state: Optional[str] = None
-    brightness: Optional[int] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        result = {"action": self.action}
-        if self.action == "led_control":
-            result["parameters"] = {}
-            if self.color is not None:
-                result["parameters"]["color"] = self.color
-            if self.state is not None:
-                result["parameters"]["state"] = self.state
-            if self.brightness is not None:
-                result["parameters"]["brightness"] = self.brightness
-        return result
-
 class CommandValidator:
     """Validates and sanitizes voice commands."""
-    
-    # Controllable loads — must match the LOADS table in the ESP32 firmware.
-    # "all" is accepted as a broadcast to every load.
-    VALID_LOADS = {"big_lights", "leds", "all"}
+
     VALID_STATES = {"on", "off"}
 
-    def __init__(self):
+    def __init__(self, registry=None):
         self.logger = logging.getLogger(__name__)
+        # Device registry (voicecommand.devices.DeviceRegistry). When provided,
+        # set_rgb / set_switch commands resolve their "target" to a known device
+        # and the device's type is checked against the action. When None (e.g.
+        # in unit tests), target is passed through unresolved.
+        self.registry = registry
 
         # Patterns for malicious content detection
         self.malicious_patterns = [
@@ -203,20 +169,9 @@ class CommandValidator:
             raise ValidationError("Action must be a string")
         
         # Validate action type
-        valid_actions = ["set_load", "set_rgb", "unknown"]
+        valid_actions = ["set_rgb", "set_switch", "unknown"]
         if action not in valid_actions:
             raise ValidationError(f"Invalid action: {action}. Must be one of {valid_actions}")
-
-        # Validate load-control parameters
-        if action == "set_load":
-            if "parameters" not in data:
-                raise ValidationError("set_load action requires parameters")
-
-            params = data["parameters"]
-            if not isinstance(params, dict):
-                raise ValidationError("Parameters must be an object")
-
-            return self._validate_load_parameters(params)
 
         # Validate RGB-strip parameters
         if action == "set_rgb":
@@ -227,7 +182,22 @@ class CommandValidator:
             if not isinstance(params, dict):
                 raise ValidationError("Parameters must be an object")
 
-            return self._validate_rgb_parameters(params)
+            result = self._validate_rgb_parameters(params)
+            result["target"] = self._resolve_target(action, data.get("target"))
+            return result
+
+        # Validate on/off smart-plug parameters
+        if action == "set_switch":
+            if "parameters" not in data:
+                raise ValidationError("set_switch action requires parameters")
+
+            params = data["parameters"]
+            if not isinstance(params, dict):
+                raise ValidationError("Parameters must be an object")
+
+            result = self._validate_switch_parameters(params)
+            result["target"] = self._resolve_target(action, data.get("target"))
+            return result
 
         # For unknown actions, just ensure no dangerous parameters
         elif action == "unknown":
@@ -236,28 +206,6 @@ class CommandValidator:
 
         return data
     
-    def _validate_load_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate set_load parameters (load name + on/off state)."""
-        load = params.get("load")
-        if not isinstance(load, str):
-            raise ValidationError("load must be a string")
-        load = load.lower().strip()
-        if load not in self.VALID_LOADS:
-            raise ValidationError(
-                f"Invalid load: {load}. Must be one of {sorted(self.VALID_LOADS)}"
-            )
-
-        state = params.get("state")
-        if not isinstance(state, str):
-            raise ValidationError("state must be a string")
-        state = state.lower().strip()
-        if state not in self.VALID_STATES:
-            raise ValidationError(
-                f"Invalid state: {state}. Must be one of {sorted(self.VALID_STATES)}"
-            )
-
-        return {"action": "set_load", "parameters": {"load": load, "state": state}}
-
     def _validate_rgb_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Validate set_rgb parameters (any of colour / on-off state / brightness).
 
@@ -327,63 +275,48 @@ class CommandValidator:
             )
         return {"action": "set_rgb", "parameters": validated}
 
-    def _validate_led_parameters(self, params: Dict[str, Any], full_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate LED control parameters."""
-        validated_params = {}
-        
-        # Validate color
-        if "color" in params:
-            color = params["color"]
-            if color is not None:
-                if not isinstance(color, str):
-                    raise ValidationError("Color must be a string")
-                
-                color = color.lower().strip()
-                try:
-                    # Validate against enum
-                    LEDColor(color)
-                    validated_params["color"] = color
-                except ValueError:
-                    raise ValidationError(f"Invalid color: {color}. Must be one of {[c.value for c in LEDColor]}")
-        
-        # Validate state
-        if "state" in params:
-            state = params["state"]
-            if state is not None:
-                if not isinstance(state, str):
-                    raise ValidationError("State must be a string")
-                
-                state = state.lower().strip()
-                try:
-                    # Validate against enum
-                    LEDState(state)
-                    validated_params["state"] = state
-                except ValueError:
-                    raise ValidationError(f"Invalid state: {state}. Must be one of {[s.value for s in LEDState]}")
-        
-        # Validate brightness
-        if "brightness" in params:
-            brightness = params["brightness"]
-            if brightness is not None:
-                if not isinstance(brightness, (int, float)):
-                    raise ValidationError("Brightness must be a number")
-                
-                brightness = int(brightness)
-                if brightness < 0 or brightness > 100:
-                    raise ValidationError("Brightness must be between 0 and 100")
-                
-                validated_params["brightness"] = brightness
-        
-        # Ensure at least one parameter is provided
-        if not validated_params:
-            raise ValidationError("LED control requires at least one parameter (color, state, or brightness)")
-        
-        # Return validated structure
-        return {
-            "action": "led_control",
-            "parameters": validated_params
-        }
-    
+    def _validate_switch_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate set_switch parameters (just an on/off state)."""
+        state = params.get("state")
+        if not isinstance(state, str):
+            raise ValidationError("state must be a string")
+        state = state.lower().strip()
+        if state not in self.VALID_STATES:
+            raise ValidationError(
+                f"Invalid state: {state}. Must be one of {sorted(self.VALID_STATES)}"
+            )
+        return {"action": "set_switch", "parameters": {"state": state}}
+
+    def _resolve_target(self, action: str, target: Any) -> Optional[str]:
+        """Resolve a command's target to a known device's canonical name.
+
+        With no registry (unit tests) the raw target string is passed through.
+        With a registry, the target must resolve to a device whose type the
+        action can drive (e.g. set_switch -> a switch); an unknown or
+        type-mismatched target is rejected so a misheard name never fires the
+        wrong device.
+        """
+        if target is not None and not isinstance(target, str):
+            raise ValidationError("target must be a string")
+        if self.registry is None:
+            return target.lower().strip() if isinstance(target, str) else None
+
+        from voicecommand.devices import ACTION_TYPES
+        kind = ACTION_TYPES.get(action)
+        device = self.registry.resolve(target, kind)
+        if device is None:
+            named = f"{target!r}" if target else "(no target given)"
+            raise ValidationError(
+                f"Could not resolve target {named} to a configured device for "
+                f"{action}. Known devices: "
+                f"{sorted(d.name for d in self.registry.devices)}"
+            )
+        if kind and device.type not in kind:
+            raise ValidationError(
+                f"Device {device.name!r} ({device.type}) cannot handle {action}"
+            )
+        return device.name
+
     def _validate_safe_parameters(self, params: Any):
         """Ensure parameters don't contain dangerous content."""
         if isinstance(params, dict):
@@ -444,49 +377,3 @@ class CommandValidator:
         except (json.JSONDecodeError, ValueError):
             pass
         return None
-    
-    def create_led_command(self, color: str = None, state: str = None, brightness: int = None) -> LEDCommand:
-        """Create a validated LED command."""
-        # Validate inputs
-        validated_data = {
-            "action": "led_control",
-            "parameters": {}
-        }
-        
-        if color is not None:
-            validated_data["parameters"]["color"] = color
-        if state is not None:
-            validated_data["parameters"]["state"] = state
-        if brightness is not None:
-            validated_data["parameters"]["brightness"] = brightness
-        
-        # Validate the complete structure
-        validated = self.validate_json_structure(validated_data)
-        
-        return LEDCommand(
-            action=validated["action"],
-            color=validated["parameters"].get("color"),
-            state=validated["parameters"].get("state"),
-            brightness=validated["parameters"].get("brightness")
-        )
-
-def validate_esp32_response(response_text: str) -> bool:
-    """Validate ESP32 response for security."""
-    if not isinstance(response_text, str):
-        return False
-    
-    # Check length
-    if len(response_text) > 1000:
-        return False
-    
-    # Should be simple status messages
-    allowed_patterns = [
-        r'^Command processed$',
-        r'^Invalid JSON$',
-        r'^Unknown action$',
-        r'^No data received$',
-        r'^Device registered$',
-        r'^Authentication failed$'
-    ]
-    
-    return any(re.match(pattern, response_text) for pattern in allowed_patterns)

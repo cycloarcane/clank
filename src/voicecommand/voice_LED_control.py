@@ -21,6 +21,7 @@ from voicecommand.config import ClankConfig
 from voicecommand.validation import (
     CommandValidator, ValidationError, COLOR_RGB, WLED_EFFECTS
 )
+from voicecommand.devices import DeviceRegistry, TYPE_SWITCH, TYPE_WLED
 from voicecommand.secure_logging import setup_secure_logging
 
 SAMPLING_RATE = 16000
@@ -28,14 +29,46 @@ CHUNK_SIZE = 512
 LOOKBACK_CHUNKS = 5
 MAX_SPEECH_SECS = 15
 
-SYSTEM_PROMPT = """/no_think You are a voice control system for an RGB LED light strip. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+def build_system_prompt(registry):
+    """Assemble the LLM system prompt for the currently-registered devices.
+
+    The device list is injected at runtime from the registry so the model only
+    ever knows about hardware that's actually configured. RGB-strip guidance is
+    always included (the colour/effect vocabulary the validator enforces);
+    on/off plug guidance and examples are always shown too so the format is
+    learned even before a plug is added.
+    """
+    has_switch = registry.has_type(TYPE_SWITCH)
+    switch_example = ""
+    if has_switch:
+        # Use a real registered plug name in the example when one exists.
+        plug = next(d for d in registry.devices if d.type == TYPE_SWITCH)
+        switch_example = (
+            f'\n- "turn off the {plug.name}" -> '
+            f'{{"action":"set_switch","target":"{plug.name}","parameters":{{"state":"off"}}}}'
+        )
+
+    return f"""/no_think You are a voice control system for smart-home devices. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
 
 The input comes from imperfect speech-to-text, so it is often garbled or
 misheard. Be forgiving: match by sound and intent, not exact words. Only use
-"unknown" when there is genuinely no reasonable lighting interpretation.
+"unknown" when there is genuinely no reasonable interpretation.
 
-You control ONE RGB LED strip. The action is always "set_rgb". Include only the
-parameters the user actually asked for:
+Devices you control — set "target" to the one the user means, matching its name
+or any of its "also called" aliases:
+{registry.prompt_block()}
+
+Every response has this shape:
+{{
+    "action": "<action>",
+    "target": "<device name>",
+    "parameters": {{ ... only the keys the user asked for ... }}
+}}
+If the user doesn't name a device and only one device can perform the action,
+you may omit "target".
+
+== RGB light strips — action "set_rgb" ==
+Include only the parameters the user actually asked for:
 - "state": "on" or "off"
 - "color": one of red, green, blue, white, warm white, yellow, orange, amber,
   purple, violet, pink, magenta, cyan, teal, turquoise, lime, gold
@@ -51,65 +84,67 @@ parameters the user actually asked for:
   "slower/calmer" -> a low value like 20.
 - "intensity": integer 0-100 — the effect's strength/amount (effect-specific).
   Use for "more/less intense", "stronger/subtler".
-
-Phrases for the strip: "leds", "led", "led strip", "strip", "the lights",
-"the light", "mood lights", and mishearings such as "let", "leads", "ledd".
-Setting a colour, brightness, effect, speed, or intensity implies the strip
+Setting a colour, brightness, effect, speed, or intensity implies that strip
 turns on, so you do not also need to add "state":"on" in that case. "dim" means
-lower brightness; "bright" or "full" means brightness 100.
+lower brightness; "bright" or "full" means brightness 100. speed and intensity
+adjust whatever effect is already running, so "make the strobe quicker" needs
+ONLY the speed (don't resend the effect unless the user is also changing it).
 
-speed and intensity adjust whatever effect is already running, so a command
-like "make the strobe quicker" needs ONLY the speed (do not resend the effect
-unless the user is also changing it).
+== On/off smart plugs — action "set_switch" ==
+For devices listed above as a smart plug. The only parameter is "state" ("on"
+or "off"); plugs have no colour, brightness, or effects.
 
 State words: on/off, turn on/off, kill, cut, shut, enable/disable.
 
 Examples:
-- "turn the lights on" -> {"action":"set_rgb","parameters":{"state":"on"}}
-- "turn off the leds" -> {"action":"set_rgb","parameters":{"state":"off"}}
-- "make it red" -> {"action":"set_rgb","parameters":{"color":"red"}}
-- "set the strip to blue" -> {"action":"set_rgb","parameters":{"color":"blue"}}
-- "dim the lights to 20 percent" -> {"action":"set_rgb","parameters":{"brightness":20}}
-- "warm white at half brightness" -> {"action":"set_rgb","parameters":{"color":"warm white","brightness":50}}
-- "make the lights breathe" -> {"action":"set_rgb","parameters":{"effect":"breathe"}}
-- "cycle through colours" -> {"action":"set_rgb","parameters":{"effect":"colorloop"}}
-- "candle mode in orange" -> {"action":"set_rgb","parameters":{"color":"orange","effect":"candle"}}
-- "strobe the lights" -> {"action":"set_rgb","parameters":{"effect":"strobe"}}
-- "make the strobe quicker" -> {"action":"set_rgb","parameters":{"speed":85}}
-- "slow it down" -> {"action":"set_rgb","parameters":{"speed":20}}
-- "make the effect more intense" -> {"action":"set_rgb","parameters":{"intensity":85}}
-- "fast rainbow" -> {"action":"set_rgb","parameters":{"effect":"rainbow","speed":85}}
-- "stop the effect" -> {"action":"set_rgb","parameters":{"effect":"solid"}}
+- "turn the lights on" -> {{"action":"set_rgb","target":"strip","parameters":{{"state":"on"}}}}
+- "turn off the leds" -> {{"action":"set_rgb","target":"strip","parameters":{{"state":"off"}}}}
+- "make it red" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"red"}}}}
+- "set the strip to blue" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"blue"}}}}
+- "dim the lights to 20 percent" -> {{"action":"set_rgb","target":"strip","parameters":{{"brightness":20}}}}
+- "warm white at half brightness" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"warm white","brightness":50}}}}
+- "make the lights breathe" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"breathe"}}}}
+- "cycle through colours" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"colorloop"}}}}
+- "candle mode in orange" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"orange","effect":"candle"}}}}
+- "strobe the lights" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"strobe"}}}}
+- "make the strobe quicker" -> {{"action":"set_rgb","target":"strip","parameters":{{"speed":85}}}}
+- "fast rainbow" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"rainbow","speed":85}}}}
+- "stop the effect" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"solid"}}}}{switch_example}
 
-Response format:
-{
-    "action": "set_rgb",
-    "parameters": { ... only the keys the user asked for ... }
-}
-
-For commands that are not about the light strip, respond with:
-{
+For commands that are not about any device, respond with:
+{{
     "action": "unknown",
-    "parameters": {}
-}
+    "parameters": {{}}
+}}
 
 Remember: Return EXACTLY ONE JSON object with no additional text or markers."""
 
 
-class RgbMqttController:
-    """Publishes RGB-strip commands to the MQTT broker.
+def _default_devices_path():
+    """Path to the device registry: $CLANK_DEVICES, else config/devices.yaml at
+    the repo root (resolved relative to this file so cwd doesn't matter)."""
+    env = os.getenv("CLANK_DEVICES")
+    if env:
+        return env
+    repo_root = os.path.normpath(os.path.join(CLANK_MOONSHINE_DEMO_DIR, "..", ".."))
+    return os.path.join(repo_root, "config", "devices.yaml")
+
+
+class MqttPublisher:
+    """Publishes device commands to the MQTT broker, addressing any topic.
 
     Holds a single persistent connection (paho's background loop with automatic
     reconnect), so each voice command is just one tiny non-blocking publish — no
-    per-command connect/handshake. Credentials come from the environment
-    (MQTT_USER / MQTT_PASS) and never touch the config file.
+    per-command connect/handshake. One publisher serves every registered device
+    (the WLED strip, plugs, ...); the per-device topic is passed at publish
+    time. Credentials come from the environment (MQTT_USER / MQTT_PASS) and
+    never touch the config file.
     """
 
     def __init__(self, config, logger):
-        import paho.mqtt.client as mqtt  # lazy: only needed for RGB control
+        import paho.mqtt.client as mqtt  # lazy: only needed for MQTT control
 
         self.logger = logger
-        self.topic = config.mqtt.rgb_set_topic
 
         # paho 2.x requires a callback API version; 1.x has no such argument.
         try:
@@ -138,54 +173,30 @@ class RgbMqttController:
         )
         self.client.loop_start()
         logger.info(
-            f"MQTT RGB controller -> {config.mqtt.broker_host}:"
-            f"{config.mqtt.broker_port} topic {self.topic!r}"
+            f"MQTT publisher -> {config.mqtt.broker_host}:{config.mqtt.broker_port}"
         )
 
-    def publish(self, payload: dict):
-        """Publish one RGB command (qos 0, not retained — commands are momentary)."""
-        self.client.publish(self.topic, json.dumps(payload), qos=0, retain=False)
+    def publish(self, topic: str, payload):
+        """Publish one command to a device's topic (qos 0, not retained —
+        commands are momentary). Dicts/lists are JSON-encoded (WLED state
+        objects); strings are sent verbatim (plug ON/OFF payloads)."""
+        if isinstance(payload, (dict, list)):
+            payload = json.dumps(payload)
+        self.client.publish(topic, payload, qos=0, retain=False)
 
 
 class VoiceProcessor:
     def __init__(self, model_name, config, logger):
         self.transcriber = Transcriber(model_name=model_name, rate=SAMPLING_RATE)
-        self.validator = CommandValidator()
         self.config = config
         self.logger = logger
 
-        esp32_ip = os.getenv("ESP32_IP", "192.168.0.18")
-        # HTTPS is used when a pinned CA cert is provided (ESP32_CA_CERT), or
-        # forced with ESP32_USE_HTTPS=true. The cert is generated alongside the
-        # firmware by scripts/generate_esp32_cert.py.
-        ca_cert = os.getenv("ESP32_CA_CERT", "")
-        use_https = bool(ca_cert) or os.getenv("ESP32_USE_HTTPS", "").lower() in (
-            "1", "true", "yes", "on"
-        )
-
-        if use_https:
-            self.esp32_endpoint = f"https://{esp32_ip}/led-control"
-            # Pin to the device's self-signed cert when supplied; otherwise fall
-            # back to default verification (and warn — this will likely fail for
-            # a self-signed device, which is the point: don't silently skip TLS).
-            self.esp32_verify = ca_cert if ca_cert else True
-            if not ca_cert:
-                self.logger.warning(
-                    "ESP32_USE_HTTPS set without ESP32_CA_CERT; TLS verification "
-                    "will use system trust and likely reject the device cert. "
-                    "Set ESP32_CA_CERT to the pinned certificate."
-                )
-        else:
-            self.esp32_endpoint = f"http://{esp32_ip}/led-control"
-            self.esp32_verify = True
-
-        # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
-        esp32_api_key = os.getenv("ESP32_API_KEY", "")
-        self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
-        # The esp_https_server has very few concurrent TLS socket slots; ask it
-        # to close each connection so the slot is freed immediately instead of
-        # lingering in keep-alive and blocking the next command.
-        self.esp32_headers["Connection"] = "close"
+        # Device registry: drives which devices exist, validation of the LLM's
+        # "target", and the device list injected into the system prompt. Adding
+        # hardware is a config/devices.yaml edit — no code change here.
+        self.registry = DeviceRegistry.from_file(_default_devices_path())
+        self.validator = CommandValidator(self.registry)
+        self.system_prompt = build_system_prompt(self.registry)
 
         # Wake word + privacy settings.
         self.wake_word = config.audio.wake_word.lower().strip()
@@ -208,14 +219,15 @@ class VoiceProcessor:
             "clack", "crank", "blank", "plank", "flank",
         }
 
-        # RGB LED strip over MQTT. Constructed once so the connection is reused
-        # for every command. If paho-mqtt isn't installed the assistant still
-        # runs (RGB commands just warn) so non-MQTT testing keeps working.
+        # One MQTT publisher shared by every device, constructed once so the
+        # connection is reused for every command. If paho-mqtt isn't installed
+        # the assistant still runs (device commands just warn) so non-MQTT
+        # testing keeps working.
         try:
-            self.rgb = RgbMqttController(config, logger)
+            self.mqtt = MqttPublisher(config, logger)
         except Exception as e:
-            self.rgb = None
-            self.logger.warning(f"MQTT RGB controller unavailable: {e}")
+            self.mqtt = None
+            self.logger.warning(f"MQTT publisher unavailable: {e}")
 
     def _is_wake_token(self, tok):
         """True if a single token is the wake word or a close mishearing."""
@@ -279,7 +291,7 @@ class VoiceProcessor:
         try:
             payload = {
                 "model": self.config.llm.model,
-                "prompt": f"{SYSTEM_PROMPT}\nUser command: {text}\nResponse:",
+                "prompt": f"{self.system_prompt}\nUser command: {text}\nResponse:",
                 "stream": False,
                 "options": {
                     "temperature": self.config.llm.temperature,
@@ -308,42 +320,16 @@ class VoiceProcessor:
                 self.logger.warning(f"LLM response validation failed: {e}")
                 return
 
-            if parsed_json["action"] == "set_load":
+            if parsed_json["action"] == "set_rgb":
                 params = parsed_json["parameters"]
-                # Log the resolved command (load -> state), never the raw
-                # speech. This is the only command record kept by default.
-                self.logger.info(
-                    f"Command: {params['load']} -> {params['state']}"
-                )
-                # One retry: a single TLS/WiFi latency spike shouldn't drop a
-                # command. The ESP32 action is idempotent (set on/off), so
-                # re-sending is safe.
-                last_err = None
-                for attempt in range(2):
-                    try:
-                        esp32_response = requests.post(
-                            self.esp32_endpoint,
-                            json=parsed_json,
-                            headers=self.esp32_headers,
-                            timeout=self.config.network.connection_timeout,
-                            verify=self.esp32_verify,
-                        )
-                        esp32_response.raise_for_status()
-                        self.logger.info(f"ESP32 response: {esp32_response.text}")
-                        last_err = None
-                        break
-                    except requests.exceptions.RequestException as e:
-                        last_err = e
-                        if attempt == 0:
-                            self.logger.warning(
-                                f"ESP32 request failed ({e}); retrying once"
-                            )
-                if last_err is not None:
-                    self.logger.error(f"Error sending command to ESP32: {last_err}")
-
-            elif parsed_json["action"] == "set_rgb":
-                params = parsed_json["parameters"]
-                # Translate to WLED's JSON state API (published to wled/clank/api).
+                device = self.registry.get(parsed_json.get("target"))
+                if device is None:
+                    self.logger.warning(
+                        f"set_rgb for unknown target {parsed_json.get('target')!r}"
+                    )
+                    return
+                # Translate to WLED's JSON state API (published to the device's
+                # topic, e.g. wled/clank/api).
                 # Per-segment colour/effect go in "seg"; on/off and brightness are
                 # top-level. Any colour/brightness/effect implies the strip is on
                 # unless the user explicitly said "off".
@@ -381,7 +367,11 @@ class VoiceProcessor:
                 # the segment, so the whole look is restored (a bare psave only
                 # stores the segment colour). WLED applies this call's changes
                 # first, then snapshots the resulting live state into the slot.
-                slot = self.config.mqtt.persist_preset
+                # The slot is per-device (devices.yaml), falling back to the
+                # global mqtt.persist_preset.
+                slot = device.persist_preset
+                if slot is None:
+                    slot = self.config.mqtt.persist_preset
                 if slot:
                     wled["psave"] = slot
                     wled["n"] = "clank-last"
@@ -389,11 +379,31 @@ class VoiceProcessor:
                     wled["sb"] = True
 
                 # Log the resolved command (never the raw speech).
-                self.logger.info(f"Command(rgb): {params}")
-                if self.rgb is None:
-                    self.logger.error("RGB command but MQTT controller is unavailable")
+                self.logger.info(f"Command(rgb): {device.name} <- {params}")
+                if self.mqtt is None:
+                    self.logger.error("RGB command but MQTT publisher is unavailable")
                 else:
-                    self.rgb.publish(wled)
+                    self.mqtt.publish(device.topic, wled)
+
+            elif parsed_json["action"] == "set_switch":
+                params = parsed_json["parameters"]
+                device = self.registry.get(parsed_json.get("target"))
+                if device is None:
+                    self.logger.warning(
+                        f"set_switch for unknown target {parsed_json.get('target')!r}"
+                    )
+                    return
+                # On/off plug (OpenBeken/Tasmota): publish the raw on/off payload
+                # to the device's command topic. No colour/brightness/effects.
+                payload = (
+                    device.on_payload if params["state"] == "on"
+                    else device.off_payload
+                )
+                self.logger.info(f"Command(switch): {device.name} -> {params['state']}")
+                if self.mqtt is None:
+                    self.logger.error("Switch command but MQTT publisher is unavailable")
+                else:
+                    self.mqtt.publish(device.topic, payload)
 
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")

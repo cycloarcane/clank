@@ -30,18 +30,12 @@ audio:
   # fast onset (e.g. "all") isn't clipped by wake-detection latency.
   command_preroll_s: 0.5
 
-# Security Settings
+# Security / privacy Settings
 security:
-  require_authentication: true
-  enable_https: true
-  api_key_length: 32
-  max_requests_per_minute: 60
-  max_audio_processing_time: 30
-  enable_audit_logging: true
   # Privacy: when false (default) raw transcripts are never logged/persisted —
-  # only resolved commands (load -> state) are recorded. Set true to debug.
+  # only resolved commands are recorded. Set true to debug.
   log_transcripts: false
-  
+
 # MQTT Settings — RGB LED strip control. The ESP32 runs WLED and subscribes to
 # its JSON API topic (<device>/api); Clank publishes WLED state objects there.
 # The broker (mosquitto) runs on this PC; WLED connects to it at the hotspot
@@ -54,13 +48,6 @@ mqtt:
   # power-cycle restores it (the device boots into this slot). 0 disables it.
   persist_preset: 1
 
-# Network Settings
-network:
-  use_service_discovery: true
-  mdns_service_name: "_clank-led._tcp.local"
-  fallback_timeout: 5.0
-  connection_timeout: 10.0
-  
 # LLM Settings
 llm:
   endpoint: "http://127.0.0.1:11434/api/generate"
