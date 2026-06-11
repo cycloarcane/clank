@@ -217,21 +217,36 @@ class VoiceProcessor:
             self.rgb = None
             self.logger.warning(f"MQTT RGB controller unavailable: {e}")
 
+    def _is_wake_token(self, tok):
+        """True if a single token is the wake word or a close mishearing."""
+        t = tok.lower().strip(".,!?;:'\"")
+        return (
+            t in self.wake_aliases
+            or difflib.SequenceMatcher(None, t, self.wake_word).ratio() >= 0.72
+        )
+
     def _strip_wake_word(self, text):
         """Detect the wake word and return (heard, command_text).
 
         Scans tokens for an exact alias or a close phonetic match (handles STT
-        mishearings like 'clink'/'crank'/'blank'). On a hit, everything after
-        the wake word is the command; text before/including it is dropped.
+        mishearings like 'clink'/'crank'/'blank'). On a hit, the wake word AND
+        any wake-word echoes immediately following it are dropped; everything
+        after that is the command.
+
+        Stripping every leading wake token (not just the first) matters for the
+        acoustic engine: the capture's pre-roll keeps the tail of "...clank",
+        which transcribes as a leading "clank" — sometimes doubled — so a
+        single-strip would leak "clank" to the LLM as a bogus command (it comes
+        back as color="clank"). Here "clank clank" -> "" (discarded) and
+        "clank clank red" -> "red".
         """
         tokens = text.split()
         for i, tok in enumerate(tokens):
-            t = tok.lower().strip(".,!?;:'\"")
-            if (
-                t in self.wake_aliases
-                or difflib.SequenceMatcher(None, t, self.wake_word).ratio() >= 0.72
-            ):
-                return True, " ".join(tokens[i + 1:]).strip()
+            if self._is_wake_token(tok):
+                j = i + 1
+                while j < len(tokens) and self._is_wake_token(tokens[j]):
+                    j += 1
+                return True, " ".join(tokens[j:]).strip()
         return False, ""
 
     def process_command(self, text):
