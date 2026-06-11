@@ -198,39 +198,6 @@ class VoiceProcessor:
         self.validator = CommandValidator(self.registry)
         self.system_prompt = build_system_prompt(self.registry)
 
-        esp32_ip = os.getenv("ESP32_IP", "192.168.0.18")
-        # HTTPS is used when a pinned CA cert is provided (ESP32_CA_CERT), or
-        # forced with ESP32_USE_HTTPS=true. The cert is generated alongside the
-        # firmware by scripts/generate_esp32_cert.py.
-        ca_cert = os.getenv("ESP32_CA_CERT", "")
-        use_https = bool(ca_cert) or os.getenv("ESP32_USE_HTTPS", "").lower() in (
-            "1", "true", "yes", "on"
-        )
-
-        if use_https:
-            self.esp32_endpoint = f"https://{esp32_ip}/led-control"
-            # Pin to the device's self-signed cert when supplied; otherwise fall
-            # back to default verification (and warn — this will likely fail for
-            # a self-signed device, which is the point: don't silently skip TLS).
-            self.esp32_verify = ca_cert if ca_cert else True
-            if not ca_cert:
-                self.logger.warning(
-                    "ESP32_USE_HTTPS set without ESP32_CA_CERT; TLS verification "
-                    "will use system trust and likely reject the device cert. "
-                    "Set ESP32_CA_CERT to the pinned certificate."
-                )
-        else:
-            self.esp32_endpoint = f"http://{esp32_ip}/led-control"
-            self.esp32_verify = True
-
-        # Optional shared key for ESP32 authentication (set ESP32_API_KEY env var)
-        esp32_api_key = os.getenv("ESP32_API_KEY", "")
-        self.esp32_headers = {"X-API-Key": esp32_api_key} if esp32_api_key else {}
-        # The esp_https_server has very few concurrent TLS socket slots; ask it
-        # to close each connection so the slot is freed immediately instead of
-        # lingering in keep-alive and blocking the next command.
-        self.esp32_headers["Connection"] = "close"
-
         # Wake word + privacy settings.
         self.wake_word = config.audio.wake_word.lower().strip()
         self.wake_engine = config.audio.wake_engine.lower().strip()
@@ -353,40 +320,7 @@ class VoiceProcessor:
                 self.logger.warning(f"LLM response validation failed: {e}")
                 return
 
-            if parsed_json["action"] == "set_load":
-                params = parsed_json["parameters"]
-                # Log the resolved command (load -> state), never the raw
-                # speech. This is the only command record kept by default.
-                self.logger.info(
-                    f"Command: {params['load']} -> {params['state']}"
-                )
-                # One retry: a single TLS/WiFi latency spike shouldn't drop a
-                # command. The ESP32 action is idempotent (set on/off), so
-                # re-sending is safe.
-                last_err = None
-                for attempt in range(2):
-                    try:
-                        esp32_response = requests.post(
-                            self.esp32_endpoint,
-                            json=parsed_json,
-                            headers=self.esp32_headers,
-                            timeout=self.config.network.connection_timeout,
-                            verify=self.esp32_verify,
-                        )
-                        esp32_response.raise_for_status()
-                        self.logger.info(f"ESP32 response: {esp32_response.text}")
-                        last_err = None
-                        break
-                    except requests.exceptions.RequestException as e:
-                        last_err = e
-                        if attempt == 0:
-                            self.logger.warning(
-                                f"ESP32 request failed ({e}); retrying once"
-                            )
-                if last_err is not None:
-                    self.logger.error(f"Error sending command to ESP32: {last_err}")
-
-            elif parsed_json["action"] == "set_rgb":
+            if parsed_json["action"] == "set_rgb":
                 params = parsed_json["parameters"]
                 device = self.registry.get(parsed_json.get("target"))
                 if device is None:

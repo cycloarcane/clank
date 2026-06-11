@@ -3,8 +3,6 @@
 import os
 import yaml
 import logging
-import secrets
-from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -49,15 +47,9 @@ class AudioConfig:
 
 @dataclass
 class SecurityConfig:
-    require_authentication: bool = True
-    enable_https: bool = True
-    api_key_length: int = 32
-    max_requests_per_minute: int = 60
-    max_audio_processing_time: int = 30
-    enable_audit_logging: bool = True
     # Privacy: when False (default), raw transcripts are NEVER logged or
-    # persisted — only resolved commands (load -> state) are recorded, so
-    # non-command speech leaves no trace. Set True only for debugging.
+    # persisted — only resolved commands are recorded, so non-command speech
+    # leaves no trace. Set True only for debugging.
     log_transcripts: bool = False
 
 @dataclass
@@ -74,13 +66,6 @@ class MqttConfig:
     # its def.ps setting) instead of the factory amber default. Set to 0 to
     # disable and avoid a flash write per command.
     persist_preset: int = 1
-
-@dataclass
-class NetworkConfig:
-    use_service_discovery: bool = True
-    mdns_service_name: str = "_clank-led._tcp.local"
-    fallback_timeout: float = 5.0
-    connection_timeout: float = 10.0
 
 @dataclass
 class LLMConfig:
@@ -118,7 +103,6 @@ class ClankConfig:
         self.audio = AudioConfig()
         self.security = SecurityConfig()
         self.mqtt = MqttConfig()
-        self.network = NetworkConfig()
         self.llm = LLMConfig()
         self.models = ModelConfig()
         self.logging = LoggingConfig()
@@ -161,8 +145,6 @@ class ClankConfig:
                 self._update_dataclass(self.security, config_data['security'])
             if 'mqtt' in config_data:
                 self._update_dataclass(self.mqtt, config_data['mqtt'])
-            if 'network' in config_data:
-                self._update_dataclass(self.network, config_data['network'])
             if 'llm' in config_data:
                 self._update_dataclass(self.llm, config_data['llm'])
             if 'models' in config_data:
@@ -183,14 +165,9 @@ class ClankConfig:
     def _load_environment_overrides(self):
         """Load configuration overrides from environment variables."""
         env_mappings = {
-            'CLANK_API_KEY': ('security', 'api_key'),
-            'CLANK_HTTPS_CERT': ('security', 'https_cert_path'),
-            'CLANK_HTTPS_KEY': ('security', 'https_key_path'),
             'CLANK_LLM_ENDPOINT': ('llm', 'endpoint'),
             'CLANK_LLM_MODEL': ('llm', 'model'),
             'CLANK_LOG_LEVEL': ('logging', 'level'),
-            'CLANK_ENABLE_HTTPS': ('security', 'enable_https'),
-            'CLANK_REQUIRE_AUTH': ('security', 'require_authentication'),
         }
         
         for env_var, (section, key) in env_mappings.items():
@@ -209,42 +186,13 @@ class ClankConfig:
             raise ValueError("Audio sampling rate must be positive")
         if self.audio.max_speech_seconds <= 0:
             raise ValueError("Max speech seconds must be positive")
-            
-        # Validate security settings
-        if self.security.api_key_length < 16:
-            raise ValueError("API key length must be at least 16 characters")
-        if self.security.max_requests_per_minute <= 0:
-            raise ValueError("Max requests per minute must be positive")
-            
-        # Validate network settings
-        if self.network.connection_timeout <= 0:
-            raise ValueError("Connection timeout must be positive")
-            
+
         # Validate LLM settings
         if self.llm.max_tokens <= 0:
             raise ValueError("Max tokens must be positive")
         if self.llm.timeout <= 0:
             raise ValueError("LLM timeout must be positive")
-    
-    def generate_api_key(self) -> str:
-        """Generate a cryptographically secure API key."""
-        return secrets.token_urlsafe(self.security.api_key_length)
-    
-    def get_api_key(self) -> str:
-        """Get API key from environment or generate new one."""
-        api_key = os.environ.get('CLANK_API_KEY')
-        if not api_key:
-            api_key = self.generate_api_key()
-            logging.warning("No API key found in environment. Generated new key.")
-            logging.info(f"Set CLANK_API_KEY environment variable to: {api_key}")
-        return api_key
-    
-    def get_cert_paths(self) -> tuple[Optional[str], Optional[str]]:
-        """Get HTTPS certificate and key paths."""
-        cert_path = os.environ.get('CLANK_HTTPS_CERT')
-        key_path = os.environ.get('CLANK_HTTPS_KEY')
-        return cert_path, key_path
-    
+
     def ensure_directories(self):
         """Ensure required directories exist."""
         directories = [
@@ -252,7 +200,6 @@ class ClankConfig:
             os.path.dirname(self.logging.audit_file),
             self.models.models_directory,
             'config',
-            'certs'
         ]
         
         for directory in directories:
