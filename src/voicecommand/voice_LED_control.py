@@ -370,6 +370,24 @@ class VoiceProcessor:
                 elif state == "on" or seg or "brightness" in params:
                     wled["on"] = True
 
+                # Persist the resulting look so a mains power-cycle restores it.
+                # WLED's "psave" snapshots the live state (after this call's
+                # changes are applied) into a preset slot; the device is set to
+                # boot into that slot (def.ps), so the strip comes back exactly
+                # as it was instead of the factory amber default. Set
+                # mqtt.persist_preset to 0 to disable (avoids a flash write per
+                # command).
+                # ib/sb make the preset include master brightness + on-state and
+                # the segment, so the whole look is restored (a bare psave only
+                # stores the segment colour). WLED applies this call's changes
+                # first, then snapshots the resulting live state into the slot.
+                slot = self.config.mqtt.persist_preset
+                if slot:
+                    wled["psave"] = slot
+                    wled["n"] = "clank-last"
+                    wled["ib"] = True
+                    wled["sb"] = True
+
                 # Log the resolved command (never the raw speech).
                 self.logger.info(f"Command(rgb): {params}")
                 if self.rgb is None:

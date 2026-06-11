@@ -50,6 +50,9 @@ mqtt:
   broker_host: "127.0.0.1"
   broker_port: 1883
   rgb_set_topic: "wled/clank/api"
+  # Save the resulting look into this WLED preset after each command so a mains
+  # power-cycle restores it (the device boots into this slot). 0 disables it.
+  persist_preset: 1
 
 # Network Settings
 network:

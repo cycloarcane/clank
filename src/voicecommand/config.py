@@ -69,6 +69,11 @@ class MqttConfig:
     broker_host: str = "127.0.0.1"
     broker_port: int = 1883
     rgb_set_topic: str = "wled/clank/api"
+    # After each command, snapshot the resulting look into this WLED preset slot
+    # so a mains power-cycle restores it (the device boots into this slot via
+    # its def.ps setting) instead of the factory amber default. Set to 0 to
+    # disable and avoid a flash write per command.
+    persist_preset: int = 1
 
 @dataclass
 class NetworkConfig:
