@@ -219,10 +219,46 @@ check_ollama() {
         else
             print_warning "Ollama service not running. Start with: ollama serve"
         fi
+
+        configure_ollama_keepalive
     else
         print_warning "Ollama not found. Please install from https://ollama.ai"
         print_info "After installing Ollama, run: ollama pull $OLLAMA_MODEL"
     fi
+}
+
+configure_ollama_keepalive() {
+    # By default Ollama evicts the model from (V)RAM after ~5 min idle, so the
+    # first command after a pause pays a slow cold reload. On a dedicated Clank
+    # box you usually want it resident for instant responses — this just holds
+    # VRAM while idle (no compute, no GPU wear).
+    if ! command -v systemctl &> /dev/null || \
+       ! systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+        print_info "Ollama isn't a systemd service here — to keep the model warm,"
+        print_info "start it with OLLAMA_KEEP_ALIVE=-1 in its environment."
+        return 0
+    fi
+
+    echo
+    print_info "Ollama unloads the model after ~5 min idle (slow first command)."
+    print_info "Keeping it loaded gives instant responses (holds VRAM; no GPU wear)."
+    read -p "Keep the LLM loaded in VRAM permanently (OLLAMA_KEEP_ALIVE=-1)? (Y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        print_info "Leaving Ollama's default unload behaviour (set later by re-running)."
+        return 0
+    fi
+
+    local dropin="/etc/systemd/system/ollama.service.d/keepalive.conf"
+    print_info "Writing $dropin (needs sudo)..."
+    sudo mkdir -p "$(dirname "$dropin")"
+    sudo tee "$dropin" > /dev/null <<'DROPIN'
+[Service]
+Environment="OLLAMA_KEEP_ALIVE=-1"
+DROPIN
+    sudo systemctl daemon-reload
+    sudo systemctl restart ollama
+    print_info "Ollama will keep models resident. Verify with: ollama ps (UNTIL = Forever)."
 }
 
 setup_configuration() {
