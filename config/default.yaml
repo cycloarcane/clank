@@ -23,8 +23,10 @@ audio:
   # "hey clank" model (hash-pinned in voice_LED_control.py).
   oww_model: "models/wakeword/hey_clank.onnx"
   # Sensitive on purpose — "hey clank" is rare, so we favour recall (the model
-  # sits at ~0.09 false positives/hour). Raise toward 0.5 if it over-triggers.
-  oww_threshold: 0.3
+  # sits at ~0.09 false positives/hour). Scores are bimodal (~0.8 hit / <0.1
+  # otherwise) so precision stays high even this low; lowered to 0.15 on the
+  # laptop mic to catch borderline hits. Raise toward 0.5 if it over-triggers.
+  oww_threshold: 0.15
   command_timeout_s: 6.0
   # Audio kept before the wake word fires and prepended to the command, so a
   # fast onset (e.g. "all") isn't clipped by wake-detection latency.
