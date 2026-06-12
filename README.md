@@ -153,6 +153,26 @@ pip install -r requirements.txt
 
    Any model that reliably outputs clean JSON works. **`qwen3:14b` will not fit in 4 GB of VRAM** — only choose it if you have a larger GPU.
 
+3. **(Recommended for a dedicated box) Keep the model loaded for instant responses.**
+
+   By default Ollama evicts the model from (V)RAM after ~5 minutes idle, so the
+   first command after a pause is slow while it reloads. To keep it resident,
+   set `OLLAMA_KEEP_ALIVE=-1` on the Ollama service. The installer offers to do
+   this for you; to set it by hand on a systemd system:
+
+   ```bash
+   sudo systemctl edit ollama
+   ```
+   Add:
+   ```ini
+   [Service]
+   Environment="OLLAMA_KEEP_ALIVE=-1"
+   ```
+   then `sudo systemctl restart ollama` and verify with `ollama ps` (the
+   **UNTIL** column reads *Forever*). This only holds VRAM while idle — there's
+   no compute and no GPU wear. Use a duration like `30m` instead of `-1` if you
+   also use the GPU for other things and want it freed after you stop talking.
+
 ---
 
 ## Step 3 — Fetch the Moonshine models
