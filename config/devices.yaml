@@ -47,10 +47,11 @@ devices:
     on_payload: "1"
     off_payload: "0"
 
-  - name: plug two
+  # Two lamps wired through one relay (identified 2026-06-12: plug2 toggled them).
+  - name: upstairs lamps
     type: switch
     topic: plug2/1/set
-    aliases: [plug 2, second plug, plug b]
+    aliases: [upstairs lamp, upstairs light, upstairs lights, the upstairs lamps, lamps upstairs]
     on_payload: "1"
     off_payload: "0"
 
