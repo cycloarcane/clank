@@ -1,0 +1,53 @@
+# Wake-word TRAINING dependencies — a SEPARATE environment from Clank's runtime.
+#
+# ⚠ Do NOT install these into Clank's runtime venv. Training needs a heavy,
+#   older stack (torch, TF for tflite export, the openWakeWord training extras)
+#   that conflicts with the lean Python 3.14 runtime. Use a dedicated venv:
+#
+#       python3.11 -m venv ~/oww-training/.venv
+#       source ~/oww-training/.venv/bin/activate.fish
+#       pip install -r scripts/train_wakeword/requirements-training.txt
+#
+# Python 3.11 is the sweet spot: the openWakeWord training pipeline and its
+# dependencies (speechbrain, torch-audiomentations, piper-phonemize) have wheels
+# there; 3.12+ is hit-or-miss and 3.14 won't work.
+#
+# HONESTY NOTE: the Clank runtime pins (requirements*.txt) were verified on this
+# box. This training env could NOT be test-installed here, so treat the versions
+# below as a known-good starting point sourced from the openWakeWord training
+# notebook — if a resolve fails, the upstream notebook is the source of truth:
+#   https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb
+# Every package below was checked to be the genuine, canonical project on PyPI.
+
+# --- Core: the trainer itself + ONNX tooling -------------------------------
+openwakeword==0.4.0           # David Scripka — same pin as the runtime
+onnx==1.21.0                  # ONNX team — needed by audit_onnx.py + export
+onnxruntime==1.26.0           # Microsoft — load test during audit
+
+# --- Recording / audio I/O for prepping clips ------------------------------
+sounddevice==0.5.5            # used by record_samples.py
+soundfile==0.14.0             # WAV read/write
+librosa==0.11.0               # feature extraction / resampling
+numpy==2.4.6
+scipy==1.17.1
+
+# --- openWakeWord training pipeline (from the upstream notebook) -----------
+# These produce the synthetic speech + augmentation the trainer expects.
+torch==2.2.2                  # PyTorch — training backend (CUDA build optional)
+torchaudio==2.2.2             # PyTorch — audio transforms
+torchinfo==1.8.0              # TylerYep — model summaries
+torchmetrics==1.3.2           # Lightning AI — training metrics
+speechbrain==0.5.16           # SpeechBrain team — embeddings/augmentation
+audiomentations==0.34.1       # iver56 — audio augmentation
+torch-audiomentations==0.11.1 # asteroid/iver56 — GPU audio augmentation
+acoustics==0.2.6              # python-acoustics — RIR / room simulation
+mutagen==1.47.0               # quodlibet — audio metadata
+pronouncing==0.2.0            # aparrish — CMU pronunciations (phrase variants)
+datasets==2.19.1              # Hugging Face — pulls precomputed negative features
+tqdm==4.68.1
+
+# --- Synthetic speech (Piper) ----------------------------------------------
+# piper-sample-generator (rhasspy) is a GIT clone, NOT a pip package — it
+# provides the TTS that creates the bulk of the positive "hey clank" samples:
+#   git clone https://github.com/rhasspy/piper-sample-generator
+# It pulls piper-phonemize / piper-tts as its own deps. See the training doc.

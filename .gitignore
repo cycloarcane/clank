@@ -36,6 +36,10 @@ models/*
 models/wakeword/*
 !models/wakeword/hey_clank.onnx
 
+# Wake-word training clips — personal recordings of your voice/room, kept local.
+# Only the trained, audited model (models/wakeword/hey_clank.onnx) is committed.
+data/
+
 # Logs
 logs/
 

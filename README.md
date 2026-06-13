@@ -363,6 +363,15 @@ Clank only acts on speech that contains the wake word. There are two engines, se
 
 Stick with `text` unless you have a tuned acoustic model.
 
+### Training your own "hey clank" model
+
+If `openwakeword` misses the wake word on your mic (recall drops on a microphone
+the model never trained on), retrain it on **your** mic. The full walkthrough —
+recording clips, running the trainer, and the mandatory audit + SHA256 re-pin —
+is in **[docs/training-wakeword.md](docs/training-wakeword.md)**. Helper scripts
+live in `scripts/train_wakeword/` (`record_samples.py` to capture clips,
+`audit_onnx.py` to vet and hash the result before Clank will load it).
+
 ---
 
 ## Configuration reference
