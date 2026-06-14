@@ -17,7 +17,7 @@ COLOR_RGB = {
     "red":       (255,   0,   0),
     "green":     (0,   255,   0),
     "blue":      (0,     0, 255),
-    "white":     (255, 255, 255),
+    "white":     (255, 255, 240),  # blue trimmed slightly — strip ran cool
     "warm white":(255, 170,  90),
     "yellow":    (255, 200,   0),
     "orange":    (255,  80,   0),

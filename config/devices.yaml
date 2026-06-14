@@ -40,10 +40,15 @@ devices:
   # (e.g. "desk lamp", "fan") and add natural aliases, and voice commands like
   # "turn off the desk lamp" will route to it. To find which physical plug is
   # which: mosquitto_pub -t 'plug1/1/set' -m 1  (then 2, then 3) and watch.
-  - name: plug one
+  # plug1 = the PC + monitors. Deliberately NOT voice-controllable: cutting its
+  # power is a hard off (data loss risk). The registry matches by substring, so
+  # the name avoids "pc"/"computer"/"monitor" entirely and has NO aliases — no
+  # spoken phrase resolves to it, but it still shows on the dashboard. (Renaming
+  # it to include "pc" would re-expose it to e.g. "turn off pc".)
+  - name: plug1 energy
     type: switch
     topic: plug1/1/set
-    aliases: [plug 1, first plug, plug a]
+    aliases: []
     on_payload: "1"
     off_payload: "0"
 
@@ -55,9 +60,12 @@ devices:
     on_payload: "1"
     off_payload: "0"
 
-  - name: plug three
+  # plug3 = mains power to the whole lighting rig (the LED PSU + the ESP32/WLED
+  # controller). NB: switching this OFF kills WLED — the strip becomes
+  # uncontrollable and the dashboard shows WLED offline until it's powered again.
+  - name: lighting circuit
     type: switch
     topic: plug3/1/set
-    aliases: [plug 3, third plug, plug c]
+    aliases: [the lighting circuit, lighting power, led power, the led rig]
     on_payload: "1"
     off_payload: "0"
