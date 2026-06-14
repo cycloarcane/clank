@@ -18,8 +18,8 @@ paho-mqtt==2.1.0                 # publishes device commands to mosquitto
 openwakeword==0.4.0              # acoustic "hey clank" wake-word gate
 
 # Development and testing (optional; not imported at runtime)
-pytest==8.4.2
-black==25.9.0
+pytest==9.0.3
+black==26.3.1
 flake8==7.3.0
 
 # System dependencies (install via the system package manager):
