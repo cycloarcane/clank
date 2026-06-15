@@ -177,12 +177,14 @@ class MqttPublisher:
         )
 
     def publish(self, topic: str, payload):
-        """Publish one command to a device's topic (qos 0, not retained —
-        commands are momentary). Dicts/lists are JSON-encoded (WLED state
-        objects); strings are sent verbatim (plug ON/OFF payloads)."""
+        """Publish one command to a device's topic (qos 1, not retained —
+        commands are momentary, but qos 1 gets a broker-level delivery ack so a
+        single dropped packet doesn't silently lose the command). Dicts/lists
+        are JSON-encoded (WLED state objects); strings are sent verbatim (plug
+        ON/OFF payloads)."""
         if isinstance(payload, (dict, list)):
             payload = json.dumps(payload)
-        self.client.publish(topic, payload, qos=0, retain=False)
+        self.client.publish(topic, payload, qos=1, retain=False)
 
 
 class VoiceProcessor:
