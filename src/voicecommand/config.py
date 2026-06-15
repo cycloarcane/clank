@@ -15,6 +15,12 @@ class AudioConfig:
     min_refresh_seconds: float = 0.2
     vad_threshold: float = 0.5
     min_silence_duration_ms: int = 300
+    # Capture device passed to PortAudio (sounddevice). Empty = the OS default
+    # input (current behaviour). Set to a device index, a name substring (e.g.
+    # "USB"), or a host-API name ("pulse") to pin Clank to a specific mic —
+    # `python -m sounddevice` lists the options. See docs/multi-mic.md for the
+    # PipeWire two-mic combine setup that uses input_device: "pulse".
+    input_device: str = ""
     # Wake word: utterances that don't begin with (a near-match of) this word
     # are discarded without being sent to the LLM, logged, or retained. Set
     # require_wake_word False to act on every utterance (less private).
