@@ -397,6 +397,7 @@ audio:
   vad_threshold: 0.5          # 0.0–1.0, raise to reduce false triggers
   min_silence_duration_ms: 300
   max_speech_seconds: 15
+  input_device: ""            # "" = OS default mic; or index / name / "pulse"
   wake_word: "clank"
   require_wake_word: true
   wake_engine: "text"         # "text" or "openwakeword"
@@ -418,6 +419,8 @@ security:
   log_transcripts: false      # keep raw speech ephemeral; true only for debugging
   enable_audit_logging: true
 ```
+
+> **Multiple mics / multi-room:** to have Clank listen to two microphones at once (e.g. one per floor) by mixing them into a single virtual source, see [docs/multi-mic.md](docs/multi-mic.md). It's a PipeWire-specific (Arch/Linux) setup that uses `audio.input_device: "pulse"`.
 
 ---
 
