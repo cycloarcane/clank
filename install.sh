@@ -151,8 +151,8 @@ setup_virtual_environment() {
 install_dependencies() {
     print_step "Installing Python dependencies..."
 
-    if [[ -f "$PROJECT_DIR/requirements-secure.txt" ]]; then
-        pip install -r "$PROJECT_DIR/requirements-secure.txt"
+    if [[ -f "$PROJECT_DIR/requirements-dev.txt" ]]; then
+        pip install -r "$PROJECT_DIR/requirements-dev.txt"
     else
         pip install -r "$PROJECT_DIR/requirements.txt"
     fi

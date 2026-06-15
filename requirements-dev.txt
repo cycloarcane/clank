@@ -1,0 +1,14 @@
+# Clank development and testing tools.
+# Includes all runtime dependencies via -r requirements.txt.
+#
+# Versions are PINNED (==) to the exact releases audited and running on the
+# Clank box (Python 3.14.5, verified 2026-06-13). Each direct dependency was
+# confirmed genuine on PyPI before pinning — see docs/dependencies.md.
+# To move a pin: bump it here, re-test, then update docs/dependencies.md.
+
+-r requirements.txt
+
+# Development and testing (optional; not imported at runtime)
+pytest==9.0.3
+black==26.3.1
+flake8==7.3.0
