@@ -638,6 +638,8 @@ def main():
         channels=1,
         blocksize=CHUNK_SIZE,
         dtype=np.float32,
+        # Empty config -> None -> PortAudio's default input device.
+        device=config.audio.input_device or None,
         callback=create_input_callback(q),
     )
 
