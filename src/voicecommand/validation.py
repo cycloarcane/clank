@@ -3,7 +3,7 @@
 import re
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 class ValidationError(Exception):
     """Custom exception for validation errors."""
@@ -348,22 +348,30 @@ class CommandValidator:
         
         return sanitized
     
-    def validate_llm_response(self, response_text: str) -> Dict[str, Any]:
-        """Validate LLM response and extract JSON."""
+    def validate_llm_response(self, response_text: str) -> List[Dict[str, Any]]:
+        """Validate LLM response and return a list of validated command dicts."""
         if not response_text:
             raise ValidationError("Empty LLM response")
-        
-        # Sanitize the response
-        sanitized = self.sanitize_text(response_text, max_length=1000)
-        
-        # Extract JSON from response
+
+        sanitized = self.sanitize_text(response_text, max_length=2000)
+
         json_data = self._extract_json_from_text(sanitized)
         if not json_data:
             self.logger.warning(f"No valid JSON found in LLM response: {sanitized[:100]}...")
-            return {"action": "unknown", "parameters": {}}
-        
-        # Validate the JSON structure
-        return self.validate_json_structure(json_data)
+            return [{"action": "unknown", "parameters": {}}]
+
+        # New format: {"commands": [...]}
+        if "commands" in json_data and isinstance(json_data["commands"], list):
+            validated = []
+            for cmd in json_data["commands"]:
+                try:
+                    validated.append(self.validate_json_structure(cmd))
+                except ValidationError as e:
+                    self.logger.warning(f"Skipping invalid command in batch: {e}")
+            return validated or [{"action": "unknown", "parameters": {}}]
+
+        # Legacy fallback: bare single-command object
+        return [self.validate_json_structure(json_data)]
     
     def _extract_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
         """Extract the first valid JSON object from text."""

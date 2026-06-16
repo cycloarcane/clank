@@ -40,15 +40,28 @@ def build_system_prompt(registry):
     """
     has_switch = registry.has_type(TYPE_SWITCH)
     switch_example = ""
+    multi_example = ""
     if has_switch:
-        # Use a real registered plug name in the example when one exists.
-        plug = next(d for d in registry.devices if d.type == TYPE_SWITCH)
+        # Use real registered plug names in examples when they exist.
+        plugs = [d for d in registry.devices if d.type == TYPE_SWITCH]
+        plug = plugs[0]
         switch_example = (
             f'\n- "turn off the {plug.name}" -> '
-            f'{{"action":"set_switch","target":"{plug.name}","parameters":{{"state":"off"}}}}'
+            f'{{"commands":[{{"action":"set_switch","target":"{plug.name}","parameters":{{"state":"off"}}}}]}}'
         )
+        # Multi-command example: pick a switch + the first wled device (if any).
+        wled_devices = [d for d in registry.devices if d.type == TYPE_WLED]
+        if wled_devices:
+            w = wled_devices[0]
+            multi_example = (
+                f'\n- "turn off the {plug.name} and the {w.name}" -> '
+                f'{{"commands":['
+                f'{{"action":"set_switch","target":"{plug.name}","parameters":{{"state":"off"}}}},'
+                f'{{"action":"set_rgb","target":"{w.name}","parameters":{{"state":"off"}}}}'
+                f']}}'
+            )
 
-    return f"""/no_think You are a voice control system for smart-home devices. You must respond with EXACTLY ONE JSON object and nothing else - no markers, no multiple responses, no extra text.
+    return f"""/no_think You are a voice control system for smart-home devices. Respond with EXACTLY ONE JSON object containing a "commands" array — nothing else, no markers, no extra text.
 
 The input comes from imperfect speech-to-text, so it is often garbled or
 misheard. Be forgiving: match by sound and intent, not exact words. Only use
@@ -58,14 +71,16 @@ Devices you control — set "target" to the one the user means, matching its nam
 or any of its "also called" aliases:
 {registry.prompt_block()}
 
-Every response has this shape:
+Response shape — always a "commands" array, even for a single command:
 {{
-    "action": "<action>",
-    "target": "<device name>",
-    "parameters": {{ ... only the keys the user asked for ... }}
+    "commands": [
+        {{"action": "<action>", "target": "<device name>", "parameters": {{ ... }} }},
+        ...
+    ]
 }}
 If the user doesn't name a device and only one device can perform the action,
-you may omit "target".
+you may omit "target". If nothing matches any device, return a single unknown
+command in the array.
 
 == RGB light strips — action "set_rgb" ==
 Include only the parameters the user actually asked for:
@@ -97,27 +112,19 @@ or "off"); plugs have no colour, brightness, or effects.
 State words: on/off, turn on/off, kill, cut, shut, enable/disable.
 
 Examples:
-- "turn the lights on" -> {{"action":"set_rgb","target":"strip","parameters":{{"state":"on"}}}}
-- "turn off the leds" -> {{"action":"set_rgb","target":"strip","parameters":{{"state":"off"}}}}
-- "make it red" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"red"}}}}
-- "set the strip to blue" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"blue"}}}}
-- "dim the lights to 20 percent" -> {{"action":"set_rgb","target":"strip","parameters":{{"brightness":20}}}}
-- "warm white at half brightness" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"warm white","brightness":50}}}}
-- "make the lights breathe" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"breathe"}}}}
-- "cycle through colours" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"colorloop"}}}}
-- "candle mode in orange" -> {{"action":"set_rgb","target":"strip","parameters":{{"color":"orange","effect":"candle"}}}}
-- "strobe the lights" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"strobe"}}}}
-- "make the strobe quicker" -> {{"action":"set_rgb","target":"strip","parameters":{{"speed":85}}}}
-- "fast rainbow" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"rainbow","speed":85}}}}
-- "stop the effect" -> {{"action":"set_rgb","target":"strip","parameters":{{"effect":"solid"}}}}{switch_example}
+- "turn the lights on" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"state":"on"}}}}]}}
+- "turn off the leds" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"state":"off"}}}}]}}
+- "make it red" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"color":"red"}}}}]}}
+- "dim the lights to 20 percent" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"brightness":20}}}}]}}
+- "warm white at half brightness" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"color":"warm white","brightness":50}}}}]}}
+- "make the lights breathe" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"effect":"breathe"}}}}]}}
+- "make the strobe quicker" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"speed":85}}}}]}}
+- "fast rainbow" -> {{"commands":[{{"action":"set_rgb","target":"strip","parameters":{{"effect":"rainbow","speed":85}}}}]}}{switch_example}{multi_example}
 
 For commands that are not about any device, respond with:
-{{
-    "action": "unknown",
-    "parameters": {{}}
-}}
+{{"commands":[{{"action":"unknown","parameters":{{}}}}]}}
 
-Remember: Return EXACTLY ONE JSON object with no additional text or markers."""
+Remember: always return the "commands" array wrapper, even for a single action."""
 
 
 def _default_devices_path():
@@ -317,95 +324,96 @@ class VoiceProcessor:
 
             # Validate and structurally check the LLM's JSON output
             try:
-                parsed_json = self.validator.validate_llm_response(response_text)
+                commands = self.validator.validate_llm_response(response_text)
             except ValidationError as e:
                 self.logger.warning(f"LLM response validation failed: {e}")
                 return
 
-            if parsed_json["action"] == "set_rgb":
-                params = parsed_json["parameters"]
-                device = self.registry.get(parsed_json.get("target"))
-                if device is None:
-                    self.logger.warning(
-                        f"set_rgb for unknown target {parsed_json.get('target')!r}"
+            for parsed_json in commands:
+                if parsed_json["action"] == "set_rgb":
+                    params = parsed_json["parameters"]
+                    device = self.registry.get(parsed_json.get("target"))
+                    if device is None:
+                        self.logger.warning(
+                            f"set_rgb for unknown target {parsed_json.get('target')!r}"
+                        )
+                        continue
+                    # Translate to WLED's JSON state API (published to the device's
+                    # topic, e.g. wled/clank/api).
+                    # Per-segment colour/effect go in "seg"; on/off and brightness are
+                    # top-level. Any colour/brightness/effect implies the strip is on
+                    # unless the user explicitly said "off".
+                    wled = {}
+                    seg = {}
+                    if "color" in params:
+                        seg["col"] = [list(COLOR_RGB[params["color"]])]
+                    if "effect" in params:
+                        seg["fx"] = WLED_EFFECTS[params["effect"]]
+                    # Effect speed (sx) and intensity (ix) are 0-255 in WLED; map
+                    # from our 0-100 percentages. These tune whatever effect is
+                    # active, so "make the strobe quicker" is just a high speed.
+                    if "speed" in params:
+                        seg["sx"] = round(params["speed"] * 255 / 100)
+                    if "intensity" in params:
+                        seg["ix"] = round(params["intensity"] * 255 / 100)
+                    if seg:
+                        wled["seg"] = [seg]
+                    if "brightness" in params:
+                        wled["bri"] = round(params["brightness"] * 255 / 100)
+                    state = params.get("state")
+                    if state == "off":
+                        wled["on"] = False
+                    elif state == "on" or seg or "brightness" in params:
+                        wled["on"] = True
+
+                    # Persist the resulting look so a mains power-cycle restores it.
+                    # WLED's "psave" snapshots the live state (after this call's
+                    # changes are applied) into a preset slot; the device is set to
+                    # boot into that slot (def.ps), so the strip comes back exactly
+                    # as it was instead of the factory amber default. Set
+                    # mqtt.persist_preset to 0 to disable (avoids a flash write per
+                    # command).
+                    # ib/sb make the preset include master brightness + on-state and
+                    # the segment, so the whole look is restored (a bare psave only
+                    # stores the segment colour). WLED applies this call's changes
+                    # first, then snapshots the resulting live state into the slot.
+                    # The slot is per-device (devices.yaml), falling back to the
+                    # global mqtt.persist_preset.
+                    slot = device.persist_preset
+                    if slot is None:
+                        slot = self.config.mqtt.persist_preset
+                    if slot:
+                        wled["psave"] = slot
+                        wled["n"] = "clank-last"
+                        wled["ib"] = True
+                        wled["sb"] = True
+
+                    # Log the resolved command (never the raw speech).
+                    self.logger.info(f"Command(rgb): {device.name} <- {params}")
+                    if self.mqtt is None:
+                        self.logger.error("RGB command but MQTT publisher is unavailable")
+                    else:
+                        self.mqtt.publish(device.topic, wled)
+
+                elif parsed_json["action"] == "set_switch":
+                    params = parsed_json["parameters"]
+                    device = self.registry.get(parsed_json.get("target"))
+                    if device is None:
+                        self.logger.warning(
+                            f"set_switch for unknown target {parsed_json.get('target')!r}"
+                        )
+                        continue
+                    # On/off plug (OpenBeken/Tasmota): publish the raw on/off payload
+                    # to the device's command topic. No colour/brightness/effects.
+                    payload = (
+                        device.on_payload if params["state"] == "on"
+                        else device.off_payload
                     )
-                    return
-                # Translate to WLED's JSON state API (published to the device's
-                # topic, e.g. wled/clank/api).
-                # Per-segment colour/effect go in "seg"; on/off and brightness are
-                # top-level. Any colour/brightness/effect implies the strip is on
-                # unless the user explicitly said "off".
-                wled = {}
-                seg = {}
-                if "color" in params:
-                    seg["col"] = [list(COLOR_RGB[params["color"]])]
-                if "effect" in params:
-                    seg["fx"] = WLED_EFFECTS[params["effect"]]
-                # Effect speed (sx) and intensity (ix) are 0-255 in WLED; map
-                # from our 0-100 percentages. These tune whatever effect is
-                # active, so "make the strobe quicker" is just a high speed.
-                if "speed" in params:
-                    seg["sx"] = round(params["speed"] * 255 / 100)
-                if "intensity" in params:
-                    seg["ix"] = round(params["intensity"] * 255 / 100)
-                if seg:
-                    wled["seg"] = [seg]
-                if "brightness" in params:
-                    wled["bri"] = round(params["brightness"] * 255 / 100)
-                state = params.get("state")
-                if state == "off":
-                    wled["on"] = False
-                elif state == "on" or seg or "brightness" in params:
-                    wled["on"] = True
-
-                # Persist the resulting look so a mains power-cycle restores it.
-                # WLED's "psave" snapshots the live state (after this call's
-                # changes are applied) into a preset slot; the device is set to
-                # boot into that slot (def.ps), so the strip comes back exactly
-                # as it was instead of the factory amber default. Set
-                # mqtt.persist_preset to 0 to disable (avoids a flash write per
-                # command).
-                # ib/sb make the preset include master brightness + on-state and
-                # the segment, so the whole look is restored (a bare psave only
-                # stores the segment colour). WLED applies this call's changes
-                # first, then snapshots the resulting live state into the slot.
-                # The slot is per-device (devices.yaml), falling back to the
-                # global mqtt.persist_preset.
-                slot = device.persist_preset
-                if slot is None:
-                    slot = self.config.mqtt.persist_preset
-                if slot:
-                    wled["psave"] = slot
-                    wled["n"] = "clank-last"
-                    wled["ib"] = True
-                    wled["sb"] = True
-
-                # Log the resolved command (never the raw speech).
-                self.logger.info(f"Command(rgb): {device.name} <- {params}")
-                if self.mqtt is None:
-                    self.logger.error("RGB command but MQTT publisher is unavailable")
-                else:
-                    self.mqtt.publish(device.topic, wled)
-
-            elif parsed_json["action"] == "set_switch":
-                params = parsed_json["parameters"]
-                device = self.registry.get(parsed_json.get("target"))
-                if device is None:
-                    self.logger.warning(
-                        f"set_switch for unknown target {parsed_json.get('target')!r}"
-                    )
-                    return
-                # On/off plug (OpenBeken/Tasmota): publish the raw on/off payload
-                # to the device's command topic. No colour/brightness/effects.
-                payload = (
-                    device.on_payload if params["state"] == "on"
-                    else device.off_payload
-                )
-                self.logger.info(f"Command(switch): {device.name} -> {params['state']}")
-                if self.mqtt is None:
-                    self.logger.error("Switch command but MQTT publisher is unavailable")
-                else:
-                    self.mqtt.publish(device.topic, payload)
+                    self.logger.info(f"Command(switch): {device.name} -> {params['state']}")
+                    if self.mqtt is None:
+                        self.logger.error("Switch command but MQTT publisher is unavailable")
+                    else:
+                        self.mqtt.publish(device.topic, payload)
 
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
