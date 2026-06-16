@@ -51,6 +51,7 @@ devices:
     aliases: []
     on_payload: "1"
     off_payload: "0"
+    protected: true
 
   # Two lamps wired through one relay (identified 2026-06-12: plug2 toggled them).
   - name: upstairs lamps

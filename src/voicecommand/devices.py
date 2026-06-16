@@ -52,6 +52,10 @@ class Device:
     # mains power-cycle restores it. None = fall back to the global
     # mqtt.persist_preset; 0 disables.
     persist_preset: Optional[int] = None
+    # Protected devices are never shown in the LLM prompt and cannot be resolved
+    # as a voice command target. Use for devices where accidental activation is
+    # dangerous (e.g. the plug powering the PC itself).
+    protected: bool = False
 
     def labels(self) -> List[str]:
         """All names this device answers to (canonical + aliases), lowercased."""
@@ -112,6 +116,7 @@ class DeviceRegistry:
             on_payload=str(entry.get("on_payload", "ON")),
             off_payload=str(entry.get("off_payload", "OFF")),
             persist_preset=entry.get("persist_preset"),
+            protected=bool(entry.get("protected", False)),
         )
 
     # ----- resolution ------------------------------------------------------
@@ -124,7 +129,7 @@ class DeviceRegistry:
         with no explicit target keeps working. Returns None if nothing matches
         or the choice is ambiguous.
         """
-        candidates = self.devices
+        candidates = [d for d in self.devices if not d.protected]
         if kind:
             kind = set(kind)
             typed = [d for d in candidates if d.type in kind]
@@ -170,10 +175,11 @@ class DeviceRegistry:
     # ----- prompt ----------------------------------------------------------
     def prompt_block(self) -> str:
         """A human-readable device list to inject into the LLM system prompt."""
-        if not self.devices:
+        visible = [d for d in self.devices if not d.protected]
+        if not visible:
             return "(no devices are currently configured)"
         lines = []
-        for d in self.devices:
+        for d in visible:
             alias_str = ", ".join(d.aliases) if d.aliases else "—"
             if d.type == TYPE_WLED:
                 kind = 'RGB light strip; action "set_rgb"; supports colour, brightness, effects, on/off'
