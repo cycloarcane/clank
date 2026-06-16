@@ -65,29 +65,24 @@ This auto-loads on every login — no service or cron job needed. If a mic isn't
 plugged in when PipeWire starts, that one loopback fails silently and Clank
 still hears the other mic.
 
-## 2. Point Clank at PipeWire
+## 2. Point Clank at PipeWire and select the combined source
 
-In `config/default.yaml`:
-
-```yaml
-audio:
-  input_device: "pulse"
-```
-
-`"pulse"` is required here: the raw ALSA `"default"` device ignores
-`PULSE_SOURCE`, so the combined virtual source would never be selected.
-
-## 3. Select the combined source at launch
-
-`start_clank.sh` (or however you launch Clank) must export `PULSE_SOURCE`
-**before** the Python process starts:
+Add these two lines to your `.env` (it is gitignored, so this stays
+machine-specific and does not affect other installs):
 
 ```sh
-export PULSE_SOURCE=combined_mics.monitor
+CLANK_INPUT_DEVICE=pulse
+PULSE_SOURCE=combined_mics.monitor
 ```
 
-(This is intentionally **not** committed in `start_clank.sh` — the source name
-only exists on a machine that has set up the drop-in above.)
+`CLANK_INPUT_DEVICE=pulse` overrides `audio.input_device` from `default.yaml`
+and tells Clank to open the PulseAudio/PipeWire device instead of raw ALSA —
+the raw ALSA `"default"` device ignores `PULSE_SOURCE`, so the combined virtual
+source would never be selected without it.
+
+`PULSE_SOURCE` is read by libpulse and tells PipeWire which source to open.
+`start_clank.sh` already exports everything in `.env` with `set -a`, so no
+changes to the script are needed.
 
 Restart Clank. Use `--oww-debug` (or watch the logs) to confirm the wake score
 spikes when you speak into *either* mic.

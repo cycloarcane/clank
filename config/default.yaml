@@ -9,10 +9,12 @@ audio:
   min_refresh_seconds: 0.2
   vad_threshold: 0.5
   min_silence_duration_ms: 300
-  # Capture device (PortAudio). Empty = OS default mic. Set to a device index,
-  # a name substring ("USB"), or a host-API name ("pulse") to pick a specific
-  # mic; `python -m sounddevice` lists them. For combining two mics into one
-  # source, see docs/multi-mic.md.
+  # Capture device (PortAudio). Empty string = OS default mic (works for most
+  # single-mic setups). Set to a device index, a name substring ("USB"), or a
+  # host-API name ("pulse") to pin to a specific mic; `python -m sounddevice`
+  # lists options. Can also be overridden per-machine via CLANK_INPUT_DEVICE in
+  # .env without touching this file. For combining two mics into one source,
+  # see docs/multi-mic.md.
   input_device: ""
   # Wake word: utterances not addressed to this word are discarded without
   # being sent to the LLM, logged, or retained. Fuzzy-matched so STT

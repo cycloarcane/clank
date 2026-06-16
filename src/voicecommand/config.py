@@ -174,6 +174,7 @@ class ClankConfig:
             'CLANK_LLM_ENDPOINT': ('llm', 'endpoint'),
             'CLANK_LLM_MODEL': ('llm', 'model'),
             'CLANK_LOG_LEVEL': ('logging', 'level'),
+            'CLANK_INPUT_DEVICE': ('audio', 'input_device'),
         }
         
         for env_var, (section, key) in env_mappings.items():

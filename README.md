@@ -388,6 +388,7 @@ All settings live in `config/default.yaml`; secrets and a few overrides come fro
 | `CLANK_LLM_ENDPOINT` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
 | `CLANK_CONFIG` | `config/default.yaml` | Path to config file |
 | `CLANK_LOG_LEVEL` | `INFO` | Log level (DEBUG / INFO / WARNING / ERROR) |
+| `CLANK_INPUT_DEVICE` | *(none, uses yaml value)* | Override `audio.input_device` per-machine without editing `default.yaml` (e.g. `pulse` for a PipeWire multi-mic setup — see `docs/multi-mic.md`) |
 
 ### config/default.yaml (key sections)
 
