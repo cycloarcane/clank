@@ -33,7 +33,7 @@ scipy==1.17.1
 
 # --- openWakeWord training pipeline (from the upstream notebook) -----------
 # These produce the synthetic speech + augmentation the trainer expects.
-torch==2.2.2                  # PyTorch — training backend (CUDA build optional)
+torch==2.12.0                  # PyTorch — training backend (CUDA build optional)
 torchaudio==2.2.2             # PyTorch — audio transforms
 torchinfo==1.8.0              # TylerYep — model summaries
 torchmetrics==1.3.2           # Lightning AI — training metrics
